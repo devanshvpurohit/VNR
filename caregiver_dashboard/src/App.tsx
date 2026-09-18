@@ -24,6 +24,18 @@ interface SpatialMemory {
   landmark_id?: number;
 }
 
+interface FallDetectorData {
+  ax: number;
+  ay: number;
+  az: number;
+  acceleration: number;
+  pitch: number;
+  roll: number;
+  falls: number;
+  state: 'NORMAL' | 'POSSIBLE_FALL' | 'IMPACT_DETECTED' | 'FALL_CONFIRMED';
+  mpu: 'OK' | 'ERROR';
+}
+
 interface LogEntry {
   id: number;
   time: string;
@@ -39,123 +51,70 @@ interface Location {
   country: string;
 }
 
-interface FallDetectorData {
-  ax: number;
-  ay: number;
-  az: number;
-  acceleration: number;
-  pitch: number;
-  roll: number;
-  falls: number;
-  state: 'NORMAL' | 'POSSIBLE_FALL' | 'IMPACT_DETECTED' | 'FALL_CONFIRMED';
-  mpu: 'OK' | 'ERROR';
-}
-
-interface ControllerStatus {
-  device: string;
-  ip: string;
-  wifi: string;
-  mpu: string;
-  falls: number;
-}
-
-// ──────────── SVG Icons ────────────
-const MapPinIcon = () => (
-  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-    <path d="M21 10c0 7-9 13-9 13s-9-6-9-13a9 9 0 0 1 18 0z" />
-    <circle cx="12" cy="10" r="3" />
-  </svg>
-);
-const EyeIcon = () => (
-  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-    <path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z" />
-    <circle cx="12" cy="12" r="3" />
-  </svg>
-);
-const NavigationIcon = () => (
-  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-    <polygon points="3 11 22 2 13 21 11 13 3 11" />
-  </svg>
-);
-const BrainIcon = () => (
-  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-    <path d="M9.5 2A2.5 2.5 0 0 1 12 4.5v15a2.5 2.5 0 0 1-4.96.44 2.5 2.5 0 0 1-2.96-3.08 3 3 0 0 1-.34-5.58 2.5 2.5 0 0 1 1.32-4.24 2.5 2.5 0 0 1 1.98-3A2.5 2.5 0 0 1 9.5 2Z" />
-    <path d="M14.5 2A2.5 2.5 0 0 0 12 4.5v15a2.5 2.5 0 0 0 4.96.44 2.5 2.5 0 0 0 2.96-3.08 3 3 0 0 0 .34-5.58 2.5 2.5 0 0 0-1.32-4.24 2.5 2.5 0 0 0-1.98-3A2.5 2.5 0 0 0 14.5 2Z" />
-  </svg>
-);
-const VolumeIcon = ({ color = 'currentColor' }: { color?: string }) => (
-  <svg viewBox="0 0 24 24" fill="none" stroke={color} strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-    <polygon points="11 5 6 9 2 9 2 15 6 15 11 19 11 5" />
-    <path d="M19.07 4.93a10 10 0 0 1 0 14.14" />
-    <path d="M15.54 8.46a5 5 0 0 1 0 7.07" />
-  </svg>
-);
-const AlertIcon = () => (
-  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-    <path d="M10.29 3.86L1.82 18a2 2 0 0 0 1.71 3h16.94a2 2 0 0 0 1.71-3L13.71 3.86a2 2 0 0 0-3.42 0z" />
-    <line x1="12" y1="9" x2="12" y2="13" />
-    <line x1="12" y1="17" x2="12.01" y2="17" />
-  </svg>
-);
-const InfoIcon = () => (
-  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-    <circle cx="12" cy="12" r="10" />
-    <line x1="12" y1="8" x2="12" y2="12" />
-    <line x1="12" y1="16" x2="12.01" y2="16" />
-  </svg>
-);
-const ListIcon = () => (
-  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-    <line x1="8" y1="6" x2="21" y2="6" /><line x1="8" y1="12" x2="21" y2="12" />
-    <line x1="8" y1="18" x2="21" y2="18" /><line x1="3" y1="6" x2="3.01" y2="6" />
-    <line x1="3" y1="12" x2="3.01" y2="12" /><line x1="3" y1="18" x2="3.01" y2="18" />
-  </svg>
-);
-const ShieldIcon = () => (
-  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-    <path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z" />
-  </svg>
-);
-const TargetIcon = () => (
-  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-    <circle cx="12" cy="12" r="10" />
-    <circle cx="12" cy="12" r="6" />
-    <circle cx="12" cy="12" r="2" />
-  </svg>
-);
-const AlertTriangleIcon = () => (
-  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-    <path d="m21.73 18-8-14a2 2 0 0 0-3.48 0l-8 14A2 2 0 0 0 4 21h16a2 2 0 0 0 1.73-3Z"/>
-    <line x1="12" y1="9" x2="12" y2="13"/>
-    <line x1="12" y1="17" x2="12.01" y2="17"/>
-  </svg>
-);
-const ActivityIcon = () => (
-  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-    <polyline points="22 12 18 12 15 21 9 3 6 12 2 12"/>
-  </svg>
-);
-
 const API = 'http://localhost:8000';
 const WS  = 'ws://localhost:8000/ws';
-const CONTROLLER_IP = '192.168.4.2';  // ESP32 Controller
+const CONTROLLER_IP = '192.168.4.2';
 
-// ──────────── Main App ────────────
+// ──────────── Icons ────────────
+const icons = {
+  shield: () => (
+    <svg className="w-full h-full" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+      <path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z" />
+    </svg>
+  ),
+  eye: () => (
+    <svg className="w-full h-full" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+      <path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z" />
+      <circle cx="12" cy="12" r="3" />
+    </svg>
+  ),
+  navigation: () => (
+    <svg className="w-full h-full" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+      <polygon points="3 11 22 2 13 21 11 13 3 11" />
+    </svg>
+  ),
+  heart: () => (
+    <svg className="w-full h-full" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+      <path d="M20.84 4.61a5.5 5.5 0 0 0-7.78 0L12 5.67l-1.06-1.06a5.5 5.5 0 0 0-7.78 7.78l1.06 1.06L12 21.23l7.78-7.78 1.06-1.06a5.5 5.5 0 0 0 0-7.78z" />
+    </svg>
+  ),
+  activity: () => (
+    <svg className="w-full h-full" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+      <polyline points="22 12 18 12 15 21 9 3 6 12 2 12"/>
+    </svg>
+  ),
+  alert: () => (
+    <svg className="w-full h-full" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+      <path d="m21.73 18-8-14a2 2 0 0 0-3.48 0l-8 14A2 2 0 0 0 4 21h16a2 2 0 0 0 1.73-3Z"/>
+      <line x1="12" y1="9" x2="12" y2="13"/>
+      <line x1="12" y1="17" x2="12.01" y2="17"/>
+    </svg>
+  ),
+  brain: () => (
+    <svg className="w-full h-full" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+      <path d="M9.5 2A2.5 2.5 0 0 1 12 4.5v15a2.5 2.5 0 0 1-4.96.44 2.5 2.5 0 0 1-2.96-3.08 3 3 0 0 1-.34-5.58 2.5 2.5 0 0 1 1.32-4.24 2.5 2.5 0 0 1 1.98-3A2.5 2.5 0 0 1 9.5 2Z" />
+      <path d="M14.5 2A2.5 2.5 0 0 0 12 4.5v15a2.5 2.5 0 0 0 4.96.44 2.5 2.5 0 0 0 2.96-3.08 3 3 0 0 0 .34-5.58 2.5 2.5 0 0 0-1.32-4.24 2.5 2.5 0 0 0-1.98-3A2.5 2.5 0 0 0 14.5 2Z" />
+    </svg>
+  ),
+  map: () => (
+    <svg className="w-full h-full" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+      <path d="M21 10c0 7-9 13-9 13s-9-6-9-13a9 9 0 0 1 18 0z" />
+      <circle cx="12" cy="10" r="3" />
+    </svg>
+  ),
+};
+
 function App() {
   const [vision, setVision] = useState<VisionContext | null>(null);
   const [indoorNav, setIndoorNav] = useState<IndoorNavigation | null>(null);
   const [spatialMemory, setSpatialMemory] = useState<SpatialMemory[]>([]);
+  const [fallData, setFallData] = useState<FallDetectorData | null>(null);
   const [logs, setLogs] = useState<LogEntry[]>([]);
   const [location, setLocation] = useState<Location | null>(null);
   const [wsState, setWsState] = useState<'connecting' | 'connected' | 'disconnected'>('connecting');
-  
-  // Fall detector state
-  const [fallData, setFallData] = useState<FallDetectorData | null>(null);
-  const [controllerStatus, setControllerStatus] = useState<ControllerStatus | null>(null);
   const [controllerConnected, setControllerConnected] = useState(false);
   
   const wsRef = useRef<WebSocket | null>(null);
-  const prevWallRef = useRef(false);
   const reconnectTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
   const fallPollInterval = useRef<ReturnType<typeof setInterval> | null>(null);
 
@@ -166,7 +125,6 @@ function App() {
     ].slice(0, 100));
   };
 
-  // Fetch fall detector data
   const fetchFallData = async () => {
     try {
       const response = await fetch(`http://${CONTROLLER_IP}/imu`, { 
@@ -174,40 +132,23 @@ function App() {
       });
       const data = await response.json();
       
+      const prevState = fallData?.state;
       setFallData(data);
       setControllerConnected(true);
       
-      // Alert on fall detection
-      if (data.state === 'FALL_CONFIRMED' && (!fallData || fallData.state !== 'FALL_CONFIRMED')) {
+      if (data.state === 'FALL_CONFIRMED' && prevState !== 'FALL_CONFIRMED') {
         addLog('fall', `🚨 FALL DETECTED! Total falls: ${data.falls}`);
-      } else if (data.state === 'POSSIBLE_FALL') {
+      } else if (data.state === 'POSSIBLE_FALL' && prevState !== 'POSSIBLE_FALL') {
         addLog('fall', '⚠️ Possible fall detected - monitoring...');
-      } else if (data.state === 'IMPACT_DETECTED') {
-        addLog('fall', '💥 Impact detected - analyzing orientation...');
       }
-    } catch (error) {
+    } catch {
       if (controllerConnected) {
         setControllerConnected(false);
-        addLog('system', 'Fall detector disconnected');
       }
       setFallData(null);
     }
   };
 
-  // Fetch controller status
-  const fetchControllerStatus = async () => {
-    try {
-      const response = await fetch(`http://${CONTROLLER_IP}/status`, {
-        signal: AbortSignal.timeout(2000)
-      });
-      const data = await response.json();
-      setControllerStatus(data);
-    } catch (error) {
-      setControllerStatus(null);
-    }
-  };
-
-  // Fetch location once
   const fetchLocation = () => {
     fetch(`${API}/location`)
       .then(r => r.json())
@@ -215,7 +156,6 @@ function App() {
       .catch(() => {});
   };
 
-  // WebSocket with auto-reconnect
   const connect = () => {
     if (wsRef.current) {
       wsRef.current.onclose = null;
@@ -236,9 +176,7 @@ function App() {
       reconnectTimer.current = setTimeout(connect, 3000);
     };
 
-    ws.onerror = () => {
-      ws.close();
-    };
+    ws.onerror = () => ws.close();
 
     ws.onmessage = (event) => {
       try {
@@ -249,11 +187,6 @@ function App() {
           addLog('speech', parsed.data.text);
         } else if (parsed.type === 'indoor_navigation') {
           setIndoorNav(parsed.data as IndoorNavigation);
-          if (parsed.data.state === 'NAVIGATING') {
-            addLog('navigation', `🧭 Navigating to ${parsed.data.destination}`);
-          } else if (parsed.data.state === 'SAFETY_HOLD') {
-            addLog('alert', `⚠️ Safety hold: ${parsed.data.hold_reason}`);
-          }
         } else if (parsed.type === 'room_labeled') {
           addLog('system', `🏠 Room labeled: ${parsed.data.name}`);
           setSpatialMemory(prev => [...prev, parsed.data]);
@@ -267,16 +200,8 @@ function App() {
 
   useEffect(() => {
     connect();
-    
-    // Start fall detector polling
     fetchFallData();
-    fetchControllerStatus();
-    fallPollInterval.current = setInterval(() => {
-      fetchFallData();
-      if (Math.random() < 0.1) { // Status every ~2 seconds
-        fetchControllerStatus();
-      }
-    }, 200);
+    fallPollInterval.current = setInterval(fetchFallData, 200);
     
     return () => {
       if (reconnectTimer.current) clearTimeout(reconnectTimer.current);
@@ -285,130 +210,140 @@ function App() {
     };
   }, []);
 
-  // Log wall detection transitions
-  useEffect(() => {
-    if (vision?.wall_ahead && !prevWallRef.current) {
-      addLog('alert', '🧱 Wall or barrier detected ahead!');
-    }
-    prevWallRef.current = vision?.wall_ahead ?? false;
-  }, [vision?.wall_ahead]);
-
-  const getStatusBadge = () => {
-    if (wsState === 'connected') {
-      return { bg: 'bg-emerald-50', text: 'text-emerald-700', dot: 'bg-emerald-500', label: '🟢 System Online' };
-    } else if (wsState === 'connecting') {
-      return { bg: 'bg-amber-50', text: 'text-amber-700', dot: 'bg-amber-500', label: '🟡 Connecting…' };
-    } else {
-      return { bg: 'bg-red-50', text: 'text-red-700', dot: 'bg-red-500', label: '🔴 Offline' };
-    }
+  const getStatusColor = () => {
+    if (wsState === 'connected') return 'bg-emerald-500';
+    if (wsState === 'connecting') return 'bg-amber-500';
+    return 'bg-red-500';
   };
 
-  const status = getStatusBadge();
-
-  const getNavStateColor = (state: string) => {
+  const getFallStateColor = (state: string) => {
     const colors = {
-      'NAVIGATING': 'text-blue-600 bg-blue-50',
-      'SAFETY_HOLD': 'text-red-600 bg-red-50',
-      'APPROACHING': 'text-green-600 bg-green-50',
-      'ARRIVED': 'text-emerald-600 bg-emerald-50',
-      'IDLE': 'text-gray-600 bg-gray-50'
+      'NORMAL': 'bg-emerald-500',
+      'POSSIBLE_FALL': 'bg-amber-500',
+      'IMPACT_DETECTED': 'bg-orange-500',
+      'FALL_CONFIRMED': 'bg-red-600'
     };
-    return colors[state as keyof typeof colors] || 'text-gray-600 bg-gray-50';
-  };
-
-  const getConfidenceColor = (conf: string) => {
-    const colors = {
-      'HIGH': 'text-green-600',
-      'MEDIUM': 'text-yellow-600',
-      'LOW': 'text-orange-600',
-      'INVALID': 'text-red-600'
-    };
-    return colors[conf as keyof typeof colors] || 'text-gray-600';
+    return colors[state as keyof typeof colors] || 'bg-gray-500';
   };
 
   return (
-    <div className="min-h-screen bg-gradient-to-br from-slate-50 via-blue-50 to-indigo-50">
-      {/* ── Header ── */}
-      <header className="bg-white/80 backdrop-blur-md border-b border-gray-200/50 sticky top-0 z-50 shadow-sm">
-        <div className="max-w-[1600px] mx-auto px-6 py-4">
+    <div className="min-h-screen bg-gradient-to-br from-slate-900 via-purple-900 to-slate-900">
+      
+      {/* Animated Background */}
+      <div className="fixed inset-0 overflow-hidden pointer-events-none">
+        <div className="absolute top-1/4 left-1/4 w-96 h-96 bg-purple-500/10 rounded-full blur-3xl animate-pulse" />
+        <div className="absolute bottom-1/4 right-1/4 w-96 h-96 bg-blue-500/10 rounded-full blur-3xl animate-pulse" style={{ animationDelay: '1s' }} />
+      </div>
+
+      {/* Header */}
+      <header className="relative bg-black/20 backdrop-blur-xl border-b border-white/10">
+        <div className="max-w-[1800px] mx-auto px-6 py-6">
           <div className="flex items-center justify-between">
-            <div className="flex items-center gap-3">
-              <div className="w-10 h-10 rounded-xl bg-gradient-to-br from-blue-500 to-indigo-600 flex items-center justify-center shadow-lg">
-                <ShieldIcon />
+            <div className="flex items-center gap-4">
+              <div className="w-14 h-14 rounded-2xl bg-gradient-to-br from-blue-500 to-purple-600 flex items-center justify-center shadow-lg shadow-purple-500/50">
+                {icons.shield()}
               </div>
               <div>
-                <h1 className="text-2xl font-bold bg-gradient-to-r from-blue-600 to-indigo-600 bg-clip-text text-transparent">
-                  SURDAS
-                </h1>
-                <p className="text-sm text-gray-600">Caregiver Dashboard</p>
+                <h1 className="text-3xl font-bold text-white">SURDAS</h1>
+                <p className="text-sm text-purple-200">Advanced Caregiver Dashboard</p>
               </div>
             </div>
-            <div className={`px-4 py-2 rounded-full ${status.bg} ${status.text} flex items-center gap-2 font-medium shadow-sm`}>
-              <span className={`w-2 h-2 rounded-full ${status.dot} animate-pulse`} />
-              {status.label}
+            
+            <div className="flex items-center gap-4">
+              {/* System Status */}
+              <div className="flex items-center gap-2 px-4 py-2 bg-white/10 backdrop-blur-md rounded-full">
+                <div className={`w-3 h-3 rounded-full ${getStatusColor()} animate-pulse`} />
+                <span className="text-white font-medium text-sm">
+                  {wsState === 'connected' ? 'System Online' : wsState === 'connecting' ? 'Connecting...' : 'Offline'}
+                </span>
+              </div>
+              
+              {/* Fall Detector Status */}
+              {controllerConnected && (
+                <div className="flex items-center gap-2 px-4 py-2 bg-white/10 backdrop-blur-md rounded-full">
+                  <div className="w-3 h-3 rounded-full bg-green-500 animate-pulse" />
+                  <span className="text-white font-medium text-sm">Fall Detector</span>
+                </div>
+              )}
             </div>
           </div>
         </div>
       </header>
 
-      {wsState !== 'connected' && (
-        <div className="max-w-[1600px] mx-auto px-6 mt-4">
-          <div className="bg-blue-50 border border-blue-200 rounded-xl p-4 flex items-center gap-3">
-            <InfoIcon />
-            <span className="text-blue-800">
-              Start <code className="px-2 py-1 bg-blue-100 rounded font-mono text-sm">python3 surdas_brain.py</code> — the dashboard will connect automatically.
-            </span>
-          </div>
-        </div>
-      )}
-
-      {/* ── Main Grid ── */}
-      <div className="max-w-[1600px] mx-auto px-6 py-6 grid grid-cols-1 lg:grid-cols-3 gap-6">
-
-        {/* ── Column 1: Vision & Status ── */}
-        <div className="space-y-6">
-          {/* Vision State */}
-          <div className="bg-white rounded-2xl shadow-lg border border-gray-100 overflow-hidden">
-            <div className="bg-gradient-to-r from-blue-500 to-indigo-600 px-6 py-4 flex items-center gap-3 text-white">
-              <EyeIcon />
-              <h2 className="text-lg font-semibold">Vision State</h2>
-            </div>
-            <div className="p-6 space-y-4">
-              <div className="flex items-center justify-between pb-3 border-b border-gray-100">
-                <span className="text-gray-600 font-medium">Mode</span>
-                <span className="px-3 py-1 bg-blue-50 text-blue-700 rounded-lg font-semibold">
-                  {vision?.mode ?? 'IDLE'}
-                </span>
+      {/* Main Dashboard */}
+      <div className="relative max-w-[1800px] mx-auto px-6 py-8">
+        
+        {/* Fall Alert Banner */}
+        {fallData?.state === 'FALL_CONFIRMED' && (
+          <div className="mb-6 bg-red-600 border-2 border-red-400 rounded-2xl p-6 shadow-2xl shadow-red-500/50 animate-pulse">
+            <div className="flex items-center gap-4">
+              <div className="w-16 h-16 bg-white rounded-full flex items-center justify-center">
+                {icons.alert()}
               </div>
-              <div className="flex items-center justify-between pb-3 border-b border-gray-100">
-                <span className="text-gray-600 font-medium">Flashlight</span>
-                <span className={`px-3 py-1 rounded-lg font-semibold ${vision?.torch_on ? 'bg-yellow-50 text-yellow-700' : 'bg-gray-50 text-gray-500'}`}>
-                  {vision ? (vision.torch_on ? '🔦 ON' : 'OFF') : '—'}
-                </span>
+              <div className="flex-1">
+                <h2 className="text-2xl font-bold text-white mb-1">🚨 FALL DETECTED</h2>
+                <p className="text-red-100">Immediate attention required! Total falls: {fallData.falls}</p>
+              </div>
+              <div className="text-right">
+                <div className="text-4xl font-bold text-white">{fallData.falls}</div>
+                <div className="text-sm text-red-100">Total Falls</div>
+              </div>
+            </div>
+          </div>
+        )}
+
+        {/* Grid Layout */}
+        <div className="grid grid-cols-1 lg:grid-cols-2 xl:grid-cols-4 gap-6">
+          
+          {/* Card 1: Vision System */}
+          <div className="bg-white/10 backdrop-blur-xl border border-white/20 rounded-3xl p-6 shadow-2xl hover:shadow-purple-500/20 transition-all">
+            <div className="flex items-center gap-3 mb-6">
+              <div className="w-10 h-10 bg-gradient-to-br from-blue-500 to-cyan-500 rounded-xl flex items-center justify-center">
+                {icons.eye()}
               </div>
               <div>
-                <span className="text-gray-600 font-medium block mb-2">Closest Obstacle</span>
-                <div className="px-4 py-3 bg-gray-50 rounded-lg">
-                  <p className="text-gray-800 font-medium">
-                    {vision?.closest_obstacle ?? '✅ Path is clear'}
-                  </p>
-                </div>
+                <h3 className="text-lg font-bold text-white">Vision System</h3>
+                <p className="text-xs text-purple-200">Real-time monitoring</p>
               </div>
-              <div className={`px-4 py-3 rounded-lg ${vision?.wall_ahead ? 'bg-red-50 border border-red-200' : 'bg-green-50 border border-green-200'}`}>
+            </div>
+            
+            <div className="space-y-4">
+              <div className="flex justify-between items-center p-3 bg-white/5 rounded-xl">
+                <span className="text-purple-200 text-sm">Mode</span>
+                <span className="text-white font-bold text-sm px-3 py-1 bg-blue-500/30 rounded-lg">
+                  {vision?.mode || 'IDLE'}
+                </span>
+              </div>
+              
+              <div className="flex justify-between items-center p-3 bg-white/5 rounded-xl">
+                <span className="text-purple-200 text-sm">Flashlight</span>
+                <span className={`text-white font-bold text-sm px-3 py-1 rounded-lg ${vision?.torch_on ? 'bg-yellow-500/30' : 'bg-gray-500/30'}`}>
+                  {vision?.torch_on ? '🔦 ON' : 'OFF'}
+                </span>
+              </div>
+              
+              <div className="p-4 bg-white/5 rounded-xl">
+                <span className="text-purple-200 text-sm block mb-2">Closest Obstacle</span>
+                <span className="text-white font-medium text-sm">
+                  {vision?.closest_obstacle || '✅ Path is clear'}
+                </span>
+              </div>
+              
+              <div className={`p-3 rounded-xl ${vision?.wall_ahead ? 'bg-red-500/30 border border-red-400/50' : 'bg-green-500/30 border border-green-400/50'}`}>
                 <div className="flex items-center justify-between">
-                  <span className="font-medium text-gray-700">Wall Detection</span>
-                  <span className={`font-bold ${vision?.wall_ahead ? 'text-red-600' : 'text-green-600'}`}>
+                  <span className="text-white font-medium text-sm">Wall Detection</span>
+                  <span className="text-white font-bold">
                     {vision?.wall_ahead ? '🧱 WARNING' : '✅ CLEAR'}
                   </span>
                 </div>
               </div>
               
               {vision && vision.detected_objects.length > 0 && (
-                <div>
-                  <span className="text-gray-600 font-medium block mb-3">Detected Objects</span>
+                <div className="p-3 bg-white/5 rounded-xl">
+                  <span className="text-purple-200 text-sm block mb-2">Detected Objects</span>
                   <div className="flex flex-wrap gap-2">
-                    {[...new Set(vision.detected_objects)].map((obj, i) => (
-                      <span key={i} className="px-3 py-1.5 bg-indigo-50 text-indigo-700 rounded-lg text-sm font-medium">
+                    {[...new Set(vision.detected_objects)].slice(0, 5).map((obj, i) => (
+                      <span key={i} className="px-2 py-1 bg-indigo-500/30 text-white text-xs rounded-lg font-medium">
                         {obj}
                       </span>
                     ))}
@@ -418,181 +353,228 @@ function App() {
             </div>
           </div>
 
-          {/* Indoor Navigation */}
-          {indoorNav && indoorNav.state !== 'IDLE' && (
-            <div className="bg-white rounded-2xl shadow-lg border border-gray-100 overflow-hidden">
-              <div className="bg-gradient-to-r from-purple-500 to-pink-600 px-6 py-4 flex items-center gap-3 text-white">
-                <NavigationIcon />
-                <h2 className="text-lg font-semibold">Indoor Navigation</h2>
+          {/* Card 2: Fall Detector */}
+          <div className="bg-white/10 backdrop-blur-xl border border-white/20 rounded-3xl p-6 shadow-2xl hover:shadow-red-500/20 transition-all">
+            <div className="flex items-center gap-3 mb-6">
+              <div className="w-10 h-10 bg-gradient-to-br from-red-500 to-pink-500 rounded-xl flex items-center justify-center">
+                {icons.heart()}
               </div>
-              <div className="p-6 space-y-4">
-                <div className="flex items-center justify-between">
-                  <span className="text-gray-600 font-medium">Status</span>
-                  <span className={`px-3 py-1.5 rounded-lg font-semibold ${getNavStateColor(indoorNav.state)}`}>
-                    {indoorNav.state}
+              <div>
+                <h3 className="text-lg font-bold text-white">Fall Detector</h3>
+                <p className="text-xs text-purple-200">
+                  {controllerConnected ? 'Active monitoring' : 'Disconnected'}
+                </p>
+              </div>
+            </div>
+            
+            {controllerConnected && fallData ? (
+              <div className="space-y-4">
+                <div className={`p-4 rounded-xl ${getFallStateColor(fallData.state)} border-2 border-white/20`}>
+                  <div className="text-center">
+                    <div className="text-2xl font-bold text-white mb-1">
+                      {fallData.state.replace('_', ' ')}
+                    </div>
+                    <div className="text-white/80 text-sm">Current Status</div>
+                  </div>
+                </div>
+                
+                <div className="grid grid-cols-2 gap-3">
+                  <div className="p-3 bg-white/5 rounded-xl text-center">
+                    <div className="text-2xl font-bold text-white">{fallData.acceleration.toFixed(1)}</div>
+                    <div className="text-xs text-purple-200 mt-1">Acceleration m/s²</div>
+                  </div>
+                  <div className="p-3 bg-white/5 rounded-xl text-center">
+                    <div className="text-2xl font-bold text-white">{fallData.falls}</div>
+                    <div className="text-xs text-purple-200 mt-1">Total Falls</div>
+                  </div>
+                </div>
+                
+                <div className="grid grid-cols-2 gap-3">
+                  <div className="p-3 bg-white/5 rounded-xl">
+                    <div className="text-sm text-purple-200 mb-1">Pitch</div>
+                    <div className="text-lg font-bold text-white">{fallData.pitch.toFixed(1)}°</div>
+                  </div>
+                  <div className="p-3 bg-white/5 rounded-xl">
+                    <div className="text-sm text-purple-200 mb-1">Roll</div>
+                    <div className="text-lg font-bold text-white">{fallData.roll.toFixed(1)}°</div>
+                  </div>
+                </div>
+                
+                <div className="p-3 bg-white/5 rounded-xl flex items-center justify-between">
+                  <span className="text-purple-200 text-sm">MPU6050 Sensor</span>
+                  <span className={`px-3 py-1 rounded-lg font-bold text-sm ${fallData.mpu === 'OK' ? 'bg-green-500/30 text-green-200' : 'bg-red-500/30 text-red-200'}`}>
+                    {fallData.mpu}
                   </span>
                 </div>
+              </div>
+            ) : (
+              <div className="flex flex-col items-center justify-center h-64 text-center">
+                <div className="w-16 h-16 border-4 border-purple-500/30 border-t-purple-500 rounded-full animate-spin mb-4" />
+                <p className="text-purple-200">Connecting to fall detector...</p>
+                <p className="text-xs text-purple-300 mt-2">Check ESP32 controller at {CONTROLLER_IP}</p>
+              </div>
+            )}
+          </div>
+
+          {/* Card 3: Indoor Navigation */}
+          <div className="bg-white/10 backdrop-blur-xl border border-white/20 rounded-3xl p-6 shadow-2xl hover:shadow-purple-500/20 transition-all">
+            <div className="flex items-center gap-3 mb-6">
+              <div className="w-10 h-10 bg-gradient-to-br from-purple-500 to-pink-500 rounded-xl flex items-center justify-center">
+                {icons.navigation()}
+              </div>
+              <div>
+                <h3 className="text-lg font-bold text-white">Indoor Navigation</h3>
+                <p className="text-xs text-purple-200">Path guidance</p>
+              </div>
+            </div>
+            
+            {indoorNav && indoorNav.state !== 'IDLE' ? (
+              <div className="space-y-4">
+                <div className="p-4 bg-gradient-to-r from-purple-500/30 to-pink-500/30 rounded-xl border border-purple-400/50">
+                  <div className="text-center">
+                    <div className="text-xl font-bold text-white mb-1">{indoorNav.state}</div>
+                    <div className="text-purple-200 text-sm">Navigation Status</div>
+                  </div>
+                </div>
+                
                 {indoorNav.destination && (
-                  <div className="flex items-center gap-2 px-4 py-3 bg-purple-50 rounded-lg">
-                    <TargetIcon />
-                    <div>
-                      <p className="text-sm text-purple-600 font-medium">Destination</p>
-                      <p className="text-purple-900 font-semibold">{indoorNav.destination}</p>
-                    </div>
+                  <div className="p-4 bg-white/5 rounded-xl">
+                    <div className="text-purple-200 text-sm mb-2">Destination</div>
+                    <div className="text-white font-bold text-lg">{indoorNav.destination}</div>
                   </div>
                 )}
+                
                 <div className="grid grid-cols-2 gap-3">
-                  <div className="px-4 py-3 bg-gray-50 rounded-lg">
-                    <p className="text-xs text-gray-600 mb-1">Confidence</p>
-                    <p className={`font-bold ${getConfidenceColor(indoorNav.confidence)}`}>
-                      {indoorNav.confidence}
-                    </p>
+                  <div className="p-3 bg-white/5 rounded-xl text-center">
+                    <div className="text-lg font-bold text-white">{indoorNav.confidence}</div>
+                    <div className="text-xs text-purple-200 mt-1">Confidence</div>
                   </div>
-                  <div className="px-4 py-3 bg-gray-50 rounded-lg">
-                    <p className="text-xs text-gray-600 mb-1">Safe Paths</p>
-                    <p className="font-bold text-gray-800">{indoorNav.safe_directions}</p>
+                  <div className="p-3 bg-white/5 rounded-xl text-center">
+                    <div className="text-lg font-bold text-white">{indoorNav.safe_directions}</div>
+                    <div className="text-xs text-purple-200 mt-1">Safe Paths</div>
                   </div>
                 </div>
-                {indoorNav.distance_remaining !== null && (
-                  <div className="px-4 py-3 bg-blue-50 rounded-lg">
-                    <p className="text-sm text-blue-600 font-medium mb-1">Distance Remaining</p>
-                    <p className="text-2xl font-bold text-blue-900">{indoorNav.distance_remaining.toFixed(1)}m</p>
-                  </div>
-                )}
-                {indoorNav.hold_reason && (
-                  <div className="px-4 py-3 bg-red-50 border border-red-200 rounded-lg flex items-start gap-2">
-                    <AlertIcon />
-                    <div>
-                      <p className="text-sm text-red-600 font-medium">Hold Reason</p>
-                      <p className="text-red-800 font-semibold">{indoorNav.hold_reason}</p>
+                
+                {indoorNav.distance_remaining && (
+                  <div className="p-3 bg-blue-500/30 rounded-xl border border-blue-400/50">
+                    <div className="text-center">
+                      <div className="text-2xl font-bold text-white">{indoorNav.distance_remaining.toFixed(1)}m</div>
+                      <div className="text-blue-200 text-sm">Distance Remaining</div>
                     </div>
                   </div>
                 )}
               </div>
-            </div>
-          )}
-        </div>
-
-        {/* ── Column 2: Location & Memory ── */}
-        <div className="space-y-6">
-          {/* Location */}
-          <div className="bg-white rounded-2xl shadow-lg border border-gray-100 overflow-hidden">
-            <div className="bg-gradient-to-r from-green-500 to-emerald-600 px-6 py-4 flex items-center gap-3 text-white">
-              <MapPinIcon />
-              <h2 className="text-lg font-semibold">Live Location</h2>
-            </div>
-            <div className="p-6">
-              {location ? (
-                <>
-                  <div className="mb-4">
-                    <div className="text-2xl font-bold text-gray-800 mb-1">
-                      📍 {location.city}{location.region ? `, ${location.region}` : ''}
-                    </div>
-                    <div className="text-sm text-gray-600">
-                      {location.country && <span className="mr-2">🌐 {location.country}</span>}
-                      <span className="font-mono">
-                        {location.lat.toFixed(4)}, {location.lng.toFixed(4)}
-                      </span>
-                    </div>
-                  </div>
-                  {location.lat !== 0 && (
-                    <iframe
-                      className="w-full h-64 rounded-xl border border-gray-200"
-                      title="User location map"
-                      src={`https://www.openstreetmap.org/export/embed.html?bbox=${location.lng - 0.012}%2C${location.lat - 0.012}%2C${location.lng + 0.012}%2C${location.lat + 0.012}&layer=mapnik&marker=${location.lat}%2C${location.lng}`}
-                    />
-                  )}
-                </>
-              ) : (
-                <p className="text-gray-500 text-center py-8">
-                  {wsState === 'connected' ? 'Fetching location…' : 'Connect SURDAS to load location'}
-                </p>
-              )}
-            </div>
+            ) : (
+              <div className="flex flex-col items-center justify-center h-64 text-center">
+                <div className="w-16 h-16 bg-purple-500/20 rounded-full flex items-center justify-center mb-4">
+                  {icons.navigation()}
+                </div>
+                <p className="text-purple-200">Navigation Idle</p>
+                <p className="text-xs text-purple-300 mt-2">Awaiting destination command</p>
+              </div>
+            )}
           </div>
 
-          {/* Spatial Memory */}
-          {spatialMemory.length > 0 && (
-            <div className="bg-white rounded-2xl shadow-lg border border-gray-100 overflow-hidden">
-              <div className="bg-gradient-to-r from-violet-500 to-purple-600 px-6 py-4 flex items-center gap-3 text-white">
-                <BrainIcon />
-                <h2 className="text-lg font-semibold">Spatial Memory</h2>
+          {/* Card 4: Spatial Memory */}
+          <div className="bg-white/10 backdrop-blur-xl border border-white/20 rounded-3xl p-6 shadow-2xl hover:shadow-blue-500/20 transition-all">
+            <div className="flex items-center gap-3 mb-6">
+              <div className="w-10 h-10 bg-gradient-to-br from-violet-500 to-purple-500 rounded-xl flex items-center justify-center">
+                {icons.brain()}
               </div>
-              <div className="p-6">
-                <div className="space-y-2">
-                  {spatialMemory.slice(0, 10).map((item, i) => (
-                    <div key={i} className="px-4 py-3 bg-violet-50 rounded-lg flex items-center justify-between">
-                      <span className="font-medium text-violet-900">{item.name}</span>
-                      <span className="text-xs text-violet-600 px-2 py-1 bg-violet-100 rounded">
-                        {item.room_id ? '🏠 Room' : '📍 Landmark'}
-                      </span>
-                    </div>
-                  ))}
-                </div>
+              <div>
+                <h3 className="text-lg font-bold text-white">Spatial Memory</h3>
+                <p className="text-xs text-purple-200">{spatialMemory.length} locations stored</p>
               </div>
             </div>
-          )}
+            
+            {spatialMemory.length > 0 ? (
+              <div className="space-y-2 max-h-64 overflow-y-auto custom-scrollbar">
+                {spatialMemory.slice(0, 10).map((item, i) => (
+                  <div key={i} className="p-3 bg-white/5 rounded-xl flex items-center justify-between hover:bg-white/10 transition-colors">
+                    <span className="text-white font-medium text-sm">{item.name}</span>
+                    <span className="text-xs px-2 py-1 bg-violet-500/30 text-violet-200 rounded-lg">
+                      {item.room_id ? '🏠 Room' : '📍 Landmark'}
+                    </span>
+                  </div>
+                ))}
+              </div>
+            ) : (
+              <div className="flex flex-col items-center justify-center h-64 text-center">
+                <div className="w-16 h-16 bg-purple-500/20 rounded-full flex items-center justify-center mb-4">
+                  {icons.brain()}
+                </div>
+                <p className="text-purple-200">No spatial data yet</p>
+                <p className="text-xs text-purple-300 mt-2">Start labeling rooms and objects</p>
+              </div>
+            )}
+          </div>
         </div>
 
-        {/* ── Column 3: Activity Logs ── */}
-        <div className="lg:col-span-1">
-          <div className="bg-white rounded-2xl shadow-lg border border-gray-100 overflow-hidden h-full flex flex-col">
-            <div className="bg-gradient-to-r from-gray-700 to-gray-900 px-6 py-4 flex items-center justify-between text-white">
-              <div className="flex items-center gap-3">
-                <ListIcon />
-                <h2 className="text-lg font-semibold">Activity Logs</h2>
+        {/* Activity Logs */}
+        <div className="mt-6 bg-white/10 backdrop-blur-xl border border-white/20 rounded-3xl p-6 shadow-2xl">
+          <div className="flex items-center justify-between mb-6">
+            <div className="flex items-center gap-3">
+              <div className="w-10 h-10 bg-gradient-to-br from-gray-500 to-slate-500 rounded-xl flex items-center justify-center">
+                {icons.activity()}
               </div>
-              {logs.length > 0 && (
-                <button
-                  onClick={() => setLogs([])}
-                  className="px-3 py-1 bg-white/20 hover:bg-white/30 rounded-lg text-sm font-medium transition-colors"
+              <div>
+                <h3 className="text-lg font-bold text-white">Activity Logs</h3>
+                <p className="text-xs text-purple-200">{logs.length} events tracked</p>
+              </div>
+            </div>
+            {logs.length > 0 && (
+              <button
+                onClick={() => setLogs([])}
+                className="px-4 py-2 bg-white/10 hover:bg-white/20 text-white rounded-xl font-medium text-sm transition-colors"
+              >
+                Clear All
+              </button>
+            )}
+          </div>
+          
+          <div className="space-y-2 max-h-96 overflow-y-auto custom-scrollbar">
+            {logs.length === 0 ? (
+              <div className="text-center py-12">
+                <p className="text-purple-200">No activity yet</p>
+                <p className="text-xs text-purple-300 mt-2">Events will appear here in real-time</p>
+              </div>
+            ) : (
+              logs.map(log => (
+                <div
+                  key={log.id}
+                  className={`p-4 rounded-xl border transition-all hover:scale-[1.01] ${
+                    log.type === 'fall' ? 'bg-red-500/20 border-red-400/50' :
+                    log.type === 'alert' ? 'bg-orange-500/20 border-orange-400/50' :
+                    log.type === 'navigation' ? 'bg-blue-500/20 border-blue-400/50' :
+                    log.type === 'speech' ? 'bg-purple-500/20 border-purple-400/50' :
+                    'bg-white/5 border-white/10'
+                  }`}
                 >
-                  Clear
-                </button>
-              )}
-            </div>
-
-            <div className="flex-1 overflow-y-auto p-4 space-y-3 max-h-[calc(100vh-16rem)]">
-              {logs.length === 0 ? (
-                <p className="text-gray-500 text-center py-12">
-                  No activity yet — start SURDAS to see events here.
-                </p>
-              ) : (
-                logs.map(log => (
-                  <div
-                    key={log.id}
-                    className={`p-4 rounded-lg border ${
-                      log.type === 'alert' ? 'bg-red-50 border-red-200' :
-                      log.type === 'navigation' ? 'bg-blue-50 border-blue-200' :
-                      log.type === 'speech' ? 'bg-purple-50 border-purple-200' :
-                      'bg-gray-50 border-gray-200'
-                    }`}
-                  >
-                    <div className="flex items-center gap-2 mb-2">
-                      <div className="w-5 h-5">
-                        {log.type === 'speech' && <VolumeIcon color="#9333ea" />}
-                        {log.type === 'alert' && <AlertIcon />}
-                        {log.type === 'navigation' && <NavigationIcon />}
-                        {log.type === 'system' && <InfoIcon />}
-                      </div>
-                      <span className="text-xs text-gray-500 font-mono">{log.time}</span>
-                    </div>
-                    <p className={`text-sm font-medium ${
-                      log.type === 'alert' ? 'text-red-800' :
-                      log.type === 'navigation' ? 'text-blue-800' :
-                      log.type === 'speech' ? 'text-purple-800' :
-                      'text-gray-800'
+                  <div className="flex items-center justify-between mb-2">
+                    <span className="text-xs text-purple-300 font-mono">{log.time}</span>
+                    <span className={`text-xs px-2 py-1 rounded-lg font-bold ${
+                      log.type === 'fall' ? 'bg-red-500/50 text-white' :
+                      log.type === 'alert' ? 'bg-orange-500/50 text-white' :
+                      log.type === 'navigation' ? 'bg-blue-500/50 text-white' :
+                      log.type === 'speech' ? 'bg-purple-500/50 text-white' :
+                      'bg-gray-500/50 text-white'
                     }`}>
-                      {log.message}
-                    </p>
+                      {log.type.toUpperCase()}
+                    </span>
                   </div>
-                ))
-              )}
-            </div>
+                  <p className="text-white text-sm font-medium">{log.message}</p>
+                </div>
+              ))
+            )}
           </div>
         </div>
-
       </div>
+
+      {/* Footer */}
+      <footer className="relative mt-8 py-6 text-center border-t border-white/10">
+        <p className="text-purple-200 text-sm">SURDAS Assistive Vision System &copy; 2024</p>
+        <p className="text-purple-300 text-xs mt-1">Real-time monitoring • Fall detection • Indoor navigation</p>
+      </footer>
     </div>
   );
 }
