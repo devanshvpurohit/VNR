@@ -20,18 +20,13 @@ WALK_SPEED_KMH     = WALK_SPEED_MPS * 3.6
 OSM_NETWORK_TYPE = "walk"   # pedestrian-accessible ways only
 
 # ── Navigation thresholds ─────────────────────────────────────────────────────
-# Meters off the planned route before triggering reroute
-REROUTE_THRESHOLD_M     = 50.0
-
-# Announce upcoming turn when within this many meters
-TURN_ANNOUNCE_DISTANCE_M = 30.0   # announce turn
-TURN_WARN_DISTANCE_M     = 15.0   # "Turn now"
-
-# Minimum distance change before announcing progress again (avoids spam)
-PROGRESS_ANNOUNCE_MIN_M  = 20.0
-
-# How far a node must be before we consider arrival (GPS imprecision buffer)
-ARRIVAL_THRESHOLD_M      = 25.0
+# Import from main config for consistency
+import os
+REROUTE_THRESHOLD_M     = float(os.getenv("SURDAS_NAV_REROUTE", "50.0"))
+TURN_ANNOUNCE_DISTANCE_M = float(os.getenv("SURDAS_NAV_TURN_ANNOUNCE", "50.0"))
+TURN_WARN_DISTANCE_M     = float(os.getenv("SURDAS_NAV_TURN_WARN", "15.0"))
+ARRIVAL_THRESHOLD_M      = float(os.getenv("SURDAS_NAV_ARRIVAL", "15.0"))
+PROGRESS_ANNOUNCE_MIN_M  = float(os.getenv("SURDAS_NAV_PROGRESS_MIN", "100.0"))
 
 # ── Bearing / direction thresholds (degrees) ──────────────────────────────────
 BEARING_STRAIGHT_MAX     = 20

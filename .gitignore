@@ -1,2 +1,71 @@
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+*.egg-info/
+dist/
+build/
 
+# Virtual environments
+venv/
+env/
+ENV/
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Logs
+*.log
+logs/
+
+# Environment variables
+.env
+.env.local
+
+# Cache and temporary files
+cache/
+*.tmp
+*.temp
+.cache/
+
+# Model weights (large files - download separately)
+*.pt
+*.pth
+*.onnx
+*.pb
+models/*.pt
+!models/.gitkeep
+
+# Map data (downloaded offline)
 navigation/data/maps/
+*.graphml
+*.sqlite
+
+# Output files
+output/
+results/
+*.jpg
+*.png
+*.jpeg
+!assets/*.png
+!assets/*.jpg
+webcam_test_pipeline_output.jpg
+
+# Testing artifacts
+.pytest_cache/
+.coverage
+htmlcov/
+
+# Documentation builds
+docs/_build/
+site/

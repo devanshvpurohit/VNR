@@ -16,8 +16,8 @@ for _k in ("HF_HUB_OFFLINE", "TRANSFORMERS_OFFLINE"):
 
 os.environ["TORCH_HOME"] = os.path.expanduser("~/.cache/torch")
 
+# Get script directory for path resolution (DO NOT change working directory)
 SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
-os.chdir(SCRIPT_DIR)
 
 import traceback
 

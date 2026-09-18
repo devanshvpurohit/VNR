@@ -41,9 +41,13 @@ LLM_MODEL = _args.model  # empty string = use LocalLLM default (gemma3:1b)
 MIC_DEVICE = _args.mic
 MIC_GAIN = _args.mic_gain
 
-# Guarantee working directory is the script directory
+# Get script directory for path resolution (DO NOT change working directory)
 SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
-os.chdir(SCRIPT_DIR)
+
+# Import configuration BEFORE other modules
+import sys
+sys.path.insert(0, SCRIPT_DIR)
+from config import *
 
 import cv2
 import torch
@@ -64,17 +68,13 @@ from telemetry import start_telemetry, broadcast_event
 # =====================================================
 # CONFIGURATION
 # =====================================================
-ESP32_IP = "192.168.4.1"
-STREAM_URL = f"http://{ESP32_IP}/stream"
-LED_URL = f"http://{ESP32_IP}/led"
+# Camera settings from config
+ESP32_IP = ESP32_IP  # from config.py
+STREAM_URL = STREAM_URL  # from config.py
+LED_URL = LED_URL  # from config.py
 
 # Best available compute accelerator (CUDA / Apple Silicon MPS / CPU)
-if torch.cuda.is_available():
-    DEVICE = "cuda"
-elif torch.backends.mps.is_available():
-    DEVICE = "mps"
-else:
-    DEVICE = "cpu"
+DEVICE = get_device()
 
 print(f"[SYSTEM] Hardware Acceleration: {DEVICE}")
 if LLM_MODEL:
@@ -92,8 +92,8 @@ class CameraStream:
         
         # Fallback to local webcam (0) if stream is completely unreachable
         if not self.cap.isOpened():
-            print(f"[STREAM] Warning: {src} unreachable. Falling back to local webcam (0).")
-            self.cap = cv2.VideoCapture(0)
+            print(f"[STREAM] Warning: {src} unreachable. Falling back to local webcam ({CAMERA_FALLBACK}).")
+            self.cap = cv2.VideoCapture(CAMERA_FALLBACK)
             
         self.frame = None
         self.lock = threading.Lock()
@@ -141,38 +141,34 @@ class SurdasBrain:
         t0_load = time.time()
 
         def _load_yolo():
-            # Prefer fine-tuned India model if present, fall back to stock yolov8n.pt
-            ft_path = os.path.join(SCRIPT_DIR, "models", "yolov8n_india_ft.pt")
-            stock_path = os.path.join(SCRIPT_DIR, "yolov8n.pt")
-            yolo_path = ft_path if os.path.isfile(ft_path) else stock_path
-            if os.path.isfile(ft_path):
-                print("[AI] Using fine-tuned YOLOv8n (yolov8n_india_ft.pt).")
+            # Use config system to get model path
+            yolo_path = get_yolo_model_path()
             self.yolo = YOLO(yolo_path)
-            print("[AI] ✅ YOLOv8 loaded.")
+            print(f"[AI] ✅ YOLOv8 loaded from {yolo_path}")
 
         def _load_midas():
-            # Prefer fine-tuned India model if present
-            ft_midas = os.path.join(SCRIPT_DIR, "models", "midas_small_india_ft.pt")
-            midas_repo = os.path.expanduser("~/.cache/torch/hub/intel-isl_MiDaS_master")
+            # Use config system
+            midas_cache_str = str(MIDAS_CACHE_DIR)
+            ft_midas_path = get_midas_model_path()
 
             # Load transforms — always from local cache
-            if not os.path.isdir(midas_repo):
+            if not MIDAS_CACHE_DIR.exists():
                 raise RuntimeError(
-                    "[AI] MiDaS local cache not found at ~/.cache/torch/hub/intel-isl_MiDaS_master. "
+                    f"[AI] MiDaS local cache not found at {MIDAS_CACHE_DIR}. "
                     "Run setup_offline_models.py while online first."
                 )
-            midas_transforms = torch.hub.load(midas_repo, "transforms", source="local")
+            midas_transforms = torch.hub.load(midas_cache_str, "transforms", source="local")
             self.transform = midas_transforms.small_transform
 
-            if os.path.isfile(ft_midas):
-                print("[AI] Using fine-tuned MiDaS_small (midas_small_india_ft.pt).")
-                base = torch.hub.load(midas_repo, "MiDaS_small", source="local", pretrained=False)
-                state = torch.load(ft_midas, map_location="cpu")
+            if ft_midas_path:
+                print(f"[AI] Using fine-tuned MiDaS_small from {ft_midas_path}")
+                base = torch.hub.load(midas_cache_str, "MiDaS_small", source="local", pretrained=False)
+                state = torch.load(ft_midas_path, map_location="cpu")
                 base.load_state_dict(state)
                 self.midas = base.to(DEVICE).eval()
             else:
                 self.midas = torch.hub.load(
-                    midas_repo, "MiDaS_small", source="local", pretrained=True
+                    midas_cache_str, "MiDaS_small", source="local", pretrained=True
                 ).to(DEVICE).eval()
             print("[AI] ✅ MiDaS Depth Estimator loaded.")
 
@@ -213,20 +209,56 @@ class SurdasBrain:
         self.last_speech_time = 0
         self.last_spoken = ""
         self.led_on = False
-        self.conf_threshold = 0.25
+        self.conf_threshold = YOLO_CONFIDENCE_THRESHOLD
 
         # Live Vision Context State
         self.latest_detected_objects = []
         self.latest_closest_obstacle = None
         self.wall_detected = False
         
-        # Offline Navigation
-        from navigation import OfflineMapManager, Navigator, ManualLocation
+        # Offline Navigation with proper location provider
+        from navigation import OfflineMapManager, Navigator
+        from navigation.location import GPSSerialLocation, ManualLocation, LocationUnavailableError
+        
         self.map_manager = OfflineMapManager()
         self.map_manager.auto_load()
         self.navigator = Navigator(self.map_manager, self)
-        self.location_provider = ManualLocation(lat=17.3616, lon=78.4747)
-        self.navigator._current_location = self.location_provider.get_location()
+        
+        # Initialize location provider based on configuration
+        gps_enabled = GPS_ENABLED  # Use local variable to avoid shadowing
+        if gps_enabled:
+            try:
+                print(f"[GPS] Initializing GPS on port {GPS_PORT}...")
+                self.location_provider = GPSSerialLocation(
+                    port=GPS_PORT,
+                    baudrate=GPS_BAUD,
+                    timeout=GPS_TIMEOUT,
+                    stale_threshold=GPS_STALE_THRESHOLD,
+                    max_jump_distance=GPS_MAX_JUMP_DISTANCE_M
+                )
+                self.location_provider.start()
+                # Try to get initial fix
+                try:
+                    initial_loc = self.location_provider.get_location()
+                    print(f"[GPS] ✅ GPS fix acquired: ({initial_loc['lat']:.4f}, {initial_loc['lon']:.4f})")
+                    self.navigator._current_location = initial_loc
+                except Exception as e:
+                    print(f"[GPS] ⚠️  Initial GPS fix failed: {e}")
+                    print("[GPS] Navigation will work once GPS acquires a fix.")
+            except Exception as e:
+                print(f"[GPS] ❌ GPS initialization failed: {e}")
+                print("[GPS] Falling back to manual test location for development.")
+                gps_enabled = False
+        
+        if not gps_enabled:
+            # Use manual location for testing
+            test_loc = DEFAULT_TEST_LOCATION
+            self.location_provider = ManualLocation(
+                lat=test_loc["lat"],
+                lon=test_loc["lon"],
+                name=test_loc["name"]
+            )
+            self.navigator._current_location = self.location_provider.get_location()
 
         self.voice.speak("Ready. Navigation mode active. Say Hey Surdas.")
         
@@ -328,37 +360,26 @@ class SurdasBrain:
     def process_navigation(self, frame):
         """
         Processes both Discrete Objects (YOLO) and Dense Continuous Barriers/Walls (MiDaS).
+        
+        SAFETY CRITICAL: Vision processing continues ALWAYS, even during voice activity.
+        Only non-critical voice announcements are suppressed during voice commands.
         """
+        # Update navigation location from GPS/location provider
         if hasattr(self, "navigator") and self.navigator:
             try:
-                self.navigator.update_location(self.location_provider.get_location())
-            except Exception:
+                current_loc = self.location_provider.get_location()
+                self.navigator.update_location(current_loc)
+            except Exception as e:
+                # GPS unavailable or stale - navigation continues with last known position
                 pass
 
         h, w, _ = frame.shape
         third_w = w // 3
 
         # -------------------------------------------------------------
-        # STOP YOLO & MIDAS INFERENCE WHILE VOICE COMMAND IS ACTIVE
+        # ALWAYS RUN SAFETY PERCEPTION (YOLO + MIDAS)
+        # Safety perception MUST continue during voice processing
         # -------------------------------------------------------------
-        if self.is_voice_active():
-            if getattr(self, "_last_depth_colormap", None) is not None:
-                depth_colormap = self._last_depth_colormap.copy()
-            else:
-                depth_colormap = np.zeros_like(frame)
-
-            # Visual overlay indicating vision paused for voice priority
-            cv2.rectangle(frame, (10, 10), (w - 10, 52), (0, 0, 180), -1)
-            cv2.putText(frame, "🎤 VOICE COMMAND ACTIVE - YOLO & MIDAS PAUSED", (20, 38),
-                        cv2.FONT_HERSHEY_SIMPLEX, 0.55, (255, 255, 255), 2)
-
-            cv2.rectangle(depth_colormap, (third_w, 10), (2 * third_w, 52), (0, 0, 180), -1)
-            cv2.putText(depth_colormap, "VISION PAUSED", (third_w + 15, 38),
-                        cv2.FONT_HERSHEY_SIMPLEX, 0.55, (255, 255, 255), 2)
-
-            time.sleep(0.03)  # Yield CPU/GPU cycles to STT & LLM
-            return frame, depth_colormap, len(self.latest_detected_objects)
-
         raw_depth, depth_vis = self.compute_depth(frame)
         
         # -------------------------------------------------------------
@@ -374,7 +395,7 @@ class SurdasBrain:
         right_med = np.median(right_depth_crop) if right_depth_crop.size > 0 else 0
 
         # Close proximity pixel density in central walking corridor
-        center_close_ratio = np.mean(center_depth_crop > 950) if center_depth_crop.size > 0 else 0
+        center_close_ratio = np.mean(center_depth_crop > DEPTH_WALL_DENSE_THRESHOLD) if center_depth_crop.size > 0 else 0
 
         self.wall_detected = False
         immediate_danger = None
@@ -414,26 +435,29 @@ class SurdasBrain:
             crop_depth = raw_depth[max(0, y1):min(h, y2), max(0, x1):min(w, x2)]
             med_depth = np.median(crop_depth) if crop_depth.size > 0 else 0
 
-            # Proximity estimation
-            if med_depth > 1200:
-                proximity = "very close"
-                color = (0, 0, 255)  # Red for close obstacle
-            elif med_depth > 650:
-                proximity = "nearby"
+            # Classify relative proximity using config thresholds
+            proximity = classify_depth_proximity(med_depth)
+            proximity_desc = get_proximity_description(proximity, lang="en")
+            
+            # Color coding based on proximity
+            if proximity == "VERY_CLOSE" and pos == "ahead":
+                color = (0, 0, 255)  # Red for close obstacle directly ahead
+            elif proximity == "VERY_CLOSE":
+                color = (0, 100, 255)  # Orange for close obstacle to side
+            elif proximity == "CLOSE":
+                color = (0, 200, 255)  # Yellow
             else:
-                proximity = "distance"
+                color = (0, 255, 0)  # Green
 
-            # Convert MiDaS relative depth to approximate distance in meters
-            dist_m = round(1000.0 / max(med_depth, 1.0), 1)
-
-            if proximity == "very close" and pos == "ahead":
+            if proximity == "VERY_CLOSE" and pos == "ahead":
                 immediate_danger = f"Caution! {label} directly ahead."
 
-            detected_obstacles.append((label, pos, proximity, med_depth, conf, dist_m))
+            detected_obstacles.append((label, pos, proximity, med_depth, conf, proximity_desc))
 
             # Draw standard YOLO Bounding Box
             cv2.rectangle(frame, (x1, y1), (x2, y2), color, 2)
-            tag = f"{label} {int(conf*100)}% | {dist_m}m"
+            # Display relative proximity instead of fake metric distance
+            tag = f"{label} {int(conf*100)}% | {proximity_desc}"
             
             (tw, th), _ = cv2.getTextSize(tag, cv2.FONT_HERSHEY_SIMPLEX, 0.45, 1)
             cv2.rectangle(frame, (x1, max(0, y1 - 20)), (x1 + tw + 6, max(0, y1)), color, -1)
@@ -444,9 +468,9 @@ class SurdasBrain:
         # 3. WALL / CONTINUOUS SURFACE DETECTION (MIDAS)
         # -------------------------------------------------------------
         # If central area is blocked across a broad field with high depth and no single object explains it
-        if center_close_ratio > 0.38 and not center_object_found:
+        if center_close_ratio > DEPTH_WALL_CENTER_RATIO and not center_object_found:
             self.wall_detected = True
-            if center_med > 1150:
+            if center_med > DEPTH_WALL_IMMEDIATE_THRESHOLD:
                 immediate_danger = "Stop! Wall directly in front of you."
             else:
                 immediate_danger = "Caution! Wall ahead."
@@ -465,7 +489,7 @@ class SurdasBrain:
         # -------------------------------------------------------------
         now = time.time()
 
-        # Skip low-priority nav chatter while voice assistant is processing/speaking or user is speaking
+        # Check if voice assistant is busy (but NEVER block safety warnings)
         assistant_busy = (
             self.voice_assistant is not None
             and (
@@ -476,24 +500,27 @@ class SurdasBrain:
             )
         )
 
-        # Priority 1: Immediate Collision Hazard (always fires, interrupts everything)
+        # Priority 1: SAFETY-CRITICAL Immediate Collision Hazard
+        # These ALWAYS fire and can interrupt voice processing
         if immediate_danger:
             self.latest_closest_obstacle = immediate_danger
             speech_to_say = guidance_text if guidance_text else immediate_danger
-            if speech_to_say != self.last_spoken or now - self.last_speech_time > 3.0:
+            if speech_to_say != self.last_spoken or now - self.last_speech_time > SAFETY_ANNOUNCEMENT_COOLDOWN:
+                # Safety warnings use force=True to interrupt other voice activity
                 self.voice.speak(speech_to_say, force=True)
                 self.last_speech_time = now
                 self.last_spoken = speech_to_say
 
-        # Priority 2: Routine navigation (only when assistant is idle, cooldown 4s)
-        elif not assistant_busy and now - self.last_speech_time > 4.0:
+        # Priority 2: Routine navigation announcements
+        # These are suppressed during voice commands to avoid interrupting user interaction
+        elif not assistant_busy and now - self.last_speech_time > ROUTINE_ANNOUNCEMENT_COOLDOWN:
             if detected_obstacles:
                 detected_obstacles.sort(key=lambda x: x[3], reverse=True)
-                top_lbl, top_pos, top_prox, _, _, top_dist = detected_obstacles[0]
-                speech_text = f"{top_lbl} {top_pos}, about {top_dist} meters away."
+                top_lbl, top_pos, top_prox, _, _, top_prox_desc = detected_obstacles[0]
+                speech_text = f"{top_lbl} {top_pos}, {top_prox_desc}."
                 self.latest_closest_obstacle = speech_text
 
-                if speech_text != self.last_spoken or now - self.last_speech_time > 8.0:
+                if speech_text != self.last_spoken or now - self.last_speech_time > LONG_ANNOUNCEMENT_COOLDOWN:
                     self.voice.speak(speech_text)
                     self.last_spoken = speech_text
                     self.last_speech_time = now
@@ -518,6 +545,12 @@ class SurdasBrain:
             cv2.rectangle(depth_colormap, (third_w + 10, 10), (2 * third_w - 10, 50), (0, 0, 255), -1)
             cv2.putText(depth_colormap, "WALL AHEAD", (third_w + 20, 38),
                         cv2.FONT_HERSHEY_SIMPLEX, 0.6, (255, 255, 255), 2)
+        
+        # Visual indicator when voice command is active (but vision continues)
+        if self.is_voice_active():
+            cv2.rectangle(frame, (10, h - 40), (200, h - 10), (0, 150, 255), -1)
+            cv2.putText(frame, "🎤 Voice Active", (20, h - 18),
+                        cv2.FONT_HERSHEY_SIMPLEX, 0.5, (255, 255, 255), 2)
                         
         # Broadcast for Caregiver Dashboard
         broadcast_event("vision", self.get_vision_context())

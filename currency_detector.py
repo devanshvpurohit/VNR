@@ -6,12 +6,22 @@ from collections import deque
 class SmoothIndianCurrencyDetector:
     """
     Real-time Indian Banknote Detector & Classifier.
+    
     Combines:
     1. Banknote contour & bounding box localization
     2. Numerical & RBI script OCR extraction
     3. Multi-band HSV color profile verification
     4. Temporal voting filter for flicker-free recognition
+    
+    IMPORTANT: Confidence values are HEURISTIC estimates, not calibrated probabilities.
+    They indicate agreement between methods (OCR + Color), not statistical confidence.
     """
+    
+    # Confidence categories
+    CONFIDENCE_HIGH = "HIGH"        # Both OCR and color agree
+    CONFIDENCE_MEDIUM = "MEDIUM"    # OCR alone, or weak agreement
+    CONFIDENCE_LOW = "LOW"          # Color only, or disagreement
+    
     def __init__(self, ocr_reader):
         self.ocr = ocr_reader
         self.history = deque(maxlen=6)
@@ -122,7 +132,10 @@ class SmoothIndianCurrencyDetector:
     def detect(self, frame):
         """
         Executes full pipeline:
-        Returns: (detected_denomination_str, bounding_box, confidence_score)
+        Returns: (detected_denomination_str, bounding_box, confidence_category, detection_details)
+        
+        confidence_category: "HIGH", "MEDIUM", "LOW", or None
+        detection_details: dict with OCR result, color result, and agreement status
         """
         crop, bbox = self.extract_banknote_roi(frame)
 
@@ -133,21 +146,37 @@ class SmoothIndianCurrencyDetector:
         color_result = self.analyze_color(crop)
 
         final_val = None
-        conf = 0.5
+        confidence_category = None
+        agreement_status = "NONE"
 
+        # Evaluate evidence from both methods
         if ocr_result and color_result:
             if ocr_result == color_result:
+                # Both methods agree - highest confidence
                 final_val = ocr_result
-                conf = 0.95  # Dual verified
+                confidence_category = self.CONFIDENCE_HIGH
+                agreement_status = "FULL_AGREEMENT"
             else:
+                # Methods disagree - trust OCR but lower confidence
                 final_val = ocr_result
-                conf = 0.80
+                confidence_category = self.CONFIDENCE_MEDIUM
+                agreement_status = "DISAGREEMENT"
         elif ocr_result:
+            # OCR only
             final_val = ocr_result
-            conf = 0.85
+            confidence_category = self.CONFIDENCE_MEDIUM
+            agreement_status = "OCR_ONLY"
         elif color_result:
+            # Color only - least reliable
             final_val = color_result
-            conf = 0.70
+            confidence_category = self.CONFIDENCE_LOW
+            agreement_status = "COLOR_ONLY"
+
+        detection_details = {
+            "ocr_result": ocr_result,
+            "color_result": color_result,
+            "agreement": agreement_status,
+        }
 
         if final_val:
             self.history.append(final_val)
@@ -161,6 +190,23 @@ class SmoothIndianCurrencyDetector:
             most_common, count = Counter(valid_votes).most_common(1)[0]
             if count >= 2:
                 name = self.profiles.get(most_common, {}).get("name", f"{most_common} Rupees")
-                return name, bbox, conf
+                return name, bbox, confidence_category, detection_details
 
-        return None, bbox, 0.0
+        return None, bbox, None, detection_details
+    
+    def get_confidence_description(self, confidence_category: str) -> str:
+        """
+        Get human-readable description of confidence category.
+        
+        Args:
+            confidence_category: "HIGH", "MEDIUM", "LOW", or None
+            
+        Returns:
+            Human-readable description
+        """
+        descriptions = {
+            self.CONFIDENCE_HIGH: "High confidence (OCR and color agree)",
+            self.CONFIDENCE_MEDIUM: "Medium confidence (OCR detected)",
+            self.CONFIDENCE_LOW: "Low confidence (color only)",
+        }
+        return descriptions.get(confidence_category, "Unable to identify")

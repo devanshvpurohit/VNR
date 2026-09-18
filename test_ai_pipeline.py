@@ -41,9 +41,13 @@ LLM_MODEL = _args.model  # empty string = use LocalLLM default (gemma3:1b)
 MIC_DEVICE = _args.mic
 MIC_GAIN = _args.mic_gain
 
-# Guarantee working directory is the script directory
+# Get script directory for path resolution (DO NOT change working directory)
 SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
-os.chdir(SCRIPT_DIR)
+
+# Import configuration BEFORE other modules
+import sys
+sys.path.insert(0, SCRIPT_DIR)
+from config import *
 
 import cv2
 import torch
@@ -177,13 +181,21 @@ class SurdasWebcamTester:
         self.latest_closest_obstacle = None
         self.wall_detected = False
 
-        # Offline Navigation
-        from navigation import OfflineMapManager, Navigator, ManualLocation
+        # Offline Navigation - Use ManualLocation for webcam testing
+        from navigation import OfflineMapManager, Navigator
+        from navigation.location import ManualLocation
+        
         self.map_manager = OfflineMapManager()
         self.map_manager.auto_load()
         self.navigator = Navigator(self.map_manager, self)
-        # For testing, we use a manual location provider. In production, use GPSSerialLocation
-        self.location_provider = ManualLocation(lat=17.3616, lon=78.4747)
+        
+        # For testing, we use a manual location provider with clear warning
+        test_loc = DEFAULT_TEST_LOCATION
+        self.location_provider = ManualLocation(
+            lat=test_loc["lat"],
+            lon=test_loc["lon"],
+            name=f"{test_loc['name']} - WEBCAM TEST MODE"
+        )
         self.navigator._current_location = self.location_provider.get_location()
 
         self.voice.speak("Test suite ready. Say Hey Surdas or speak commands.")
@@ -359,26 +371,29 @@ class SurdasWebcamTester:
             crop_depth = raw_depth[max(0, y1):min(h, y2), max(0, x1):min(w, x2)]
             med_depth = np.median(crop_depth) if crop_depth.size > 0 else 0
 
-            # Proximity estimation
-            if med_depth > 1200:
-                proximity = "very close"
-                color = (0, 0, 255)
-            elif med_depth > 650:
-                proximity = "nearby"
+            # Classify relative proximity using config thresholds
+            proximity = classify_depth_proximity(med_depth)
+            proximity_desc = get_proximity_description(proximity, lang="en")
+            
+            # Color coding based on proximity
+            if proximity == "VERY_CLOSE" and pos == "ahead":
+                color = (0, 0, 255)  # Red for close obstacle directly ahead
+            elif proximity == "VERY_CLOSE":
+                color = (0, 100, 255)  # Orange for close obstacle to side
+            elif proximity == "CLOSE":
+                color = (0, 200, 255)  # Yellow
             else:
-                proximity = "distance"
+                color = (0, 255, 0)  # Green
 
-            # Convert MiDaS relative depth to approximate distance in meters
-            dist_m = round(1000.0 / max(med_depth, 1.0), 1)
-
-            if proximity == "very close" and pos == "ahead":
+            if proximity == "VERY_CLOSE" and pos == "ahead":
                 immediate_danger = f"Caution! {label} directly ahead."
 
-            detected_obstacles.append((label, pos, proximity, med_depth, conf, dist_m))
+            detected_obstacles.append((label, pos, proximity, med_depth, conf, proximity_desc))
 
             # Bounding Box
             cv2.rectangle(frame, (x1, y1), (x2, y2), color, 2)
-            tag = f"{label} {int(conf*100)}% | {dist_m}m"
+            # Display relative proximity instead of fake metric distance
+            tag = f"{label} {int(conf*100)}% | {proximity_desc}"
             
             (tw, th), _ = cv2.getTextSize(tag, cv2.FONT_HERSHEY_SIMPLEX, 0.45, 1)
             cv2.rectangle(frame, (x1, max(0, y1 - 20)), (x1 + tw + 6, max(0, y1)), color, -1)

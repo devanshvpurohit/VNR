@@ -8,9 +8,8 @@ import numpy as np
 import torch
 from ultralytics import YOLO
 
-# Guarantee working directory is the script directory
+# Get script directory for path resolution (DO NOT change working directory)
 SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
-os.chdir(SCRIPT_DIR)
 
 ESP32_IP = "192.168.4.1"
 STATUS_URL = f"http://{ESP32_IP}/status"

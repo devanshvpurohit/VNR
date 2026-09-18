@@ -1,17 +1,37 @@
-torch
-torchvision
-ultralytics
-easyocr
-pyttsx3
-opencv-python
-numpy
-timm
-sounddevice
-ollama
-faster-whisper
-silero
-openwakeword
+# Core ML/Vision
+torch>=2.0.0,<2.5.0
+torchvision>=0.15.0,<0.20.0
+ultralytics>=8.0.0,<8.3.0
+timm>=0.9.0,<1.0.0
 
-osmnx
-shapely
-networkx
+# OCR
+easyocr>=1.7.0,<2.0.0
+
+# Voice/Audio
+pyttsx3>=2.90
+sounddevice>=0.4.6,<0.5.0
+silero>=0.4.0
+openwakeword>=0.5.0
+faster-whisper>=0.10.0,<1.0.0
+
+# LLM Integration
+ollama>=0.1.0
+
+# Computer Vision
+opencv-python>=4.8.0,<5.0.0
+numpy>=1.24.0,<2.0.0
+
+# Navigation
+osmnx>=1.6.0,<2.0.0
+shapely>=2.0.0,<3.0.0
+networkx>=3.0,<4.0.0
+
+# GPS (optional - for hardware GPS modules)
+# pyserial>=3.5  # Uncomment if using GPS hardware
+
+# Utilities
+python-dotenv>=1.0.0  # For .env file support
+
+# Testing
+pytest>=7.4.0,<9.0.0
+pytest-cov>=4.1.0  # For coverage reports

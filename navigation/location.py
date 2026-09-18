@@ -2,12 +2,19 @@
 navigation/location.py — GPS / Location abstraction for SURDAS.
 
 Provides a unified LocationProvider interface that works with:
-  1. ManualLocation  — hardcoded lat/lon (dev/testing)
+  1. ManualLocation  — hardcoded lat/lon (dev/testing ONLY)
   2. GPSSerialLocation — NMEA sentences from USB/Bluetooth GPS or ESP32
   3. LocationBridge   — HTTP polling from a phone GPS bridge app
+  4. MockLocationProvider — for automated testing with simulated movement
 
 Usage:
+    # For production (real GPS):
+    provider = GPSSerialLocation(port="/dev/ttyUSB0")
+    provider.start()
+    
+    # For testing (manual coordinates):
     provider = ManualLocation(lat=17.3616, lon=78.4747)
+    
     loc = provider.get_location()
     # {"lat": 17.3616, "lon": 78.4747, "accuracy": 0.0, "timestamp": ...}
 
@@ -18,11 +25,20 @@ from __future__ import annotations
 
 import time
 import threading
+import math
 from typing import Optional
 
 
 class LocationUnavailableError(Exception):
     """Raised when location cannot be determined."""
+
+
+class InvalidCoordinateError(Exception):
+    """Raised when coordinates are invalid or out of range."""
+
+
+class StaleLocationError(Exception):
+    """Raised when location data is too old."""
 
 
 class LocationProvider:
@@ -36,12 +52,54 @@ class LocationProvider:
         )
 
     @staticmethod
-    def _make_result(lat: float, lon: float, accuracy: float = 0.0) -> dict:
+    def validate_coordinates(lat: float, lon: float) -> bool:
+        """
+        Validate that coordinates are within valid ranges.
+        
+        Returns True if valid, raises InvalidCoordinateError otherwise.
+        """
+        if not (-90.0 <= lat <= 90.0):
+            raise InvalidCoordinateError(
+                f"Invalid latitude: {lat}. Must be between -90 and 90 degrees."
+            )
+        if not (-180.0 <= lon <= 180.0):
+            raise InvalidCoordinateError(
+                f"Invalid longitude: {lon}. Must be between -180 and 180 degrees."
+            )
+        if math.isnan(lat) or math.isnan(lon):
+            raise InvalidCoordinateError("Coordinates contain NaN values.")
+        if math.isinf(lat) or math.isinf(lon):
+            raise InvalidCoordinateError("Coordinates contain infinite values.")
+        return True
+
+    @staticmethod
+    def haversine_distance(lat1: float, lon1: float, lat2: float, lon2: float) -> float:
+        """Calculate distance between two coordinates in meters."""
+        R = 6_371_000.0  # Earth radius in meters
+        φ1, φ2 = math.radians(lat1), math.radians(lat2)
+        Δφ = math.radians(lat2 - lat1)
+        Δλ = math.radians(lon2 - lon1)
+        a = math.sin(Δφ / 2) ** 2 + math.cos(φ1) * math.cos(φ2) * math.sin(Δλ / 2) ** 2
+        return R * 2 * math.atan2(math.sqrt(a), math.sqrt(1 - a))
+
+    @staticmethod
+    def _make_result(lat: float, lon: float, accuracy: float = 0.0, 
+                     fix_quality: str = "UNKNOWN") -> dict:
+        """
+        Create a standardized location result dict.
+        
+        Args:
+            lat: Latitude in decimal degrees
+            lon: Longitude in decimal degrees
+            accuracy: Estimated accuracy in meters (0.0 = exact/manual)
+            fix_quality: GPS fix quality ("FIXED", "WEAK", "LOST", "MANUAL", "MOCK", "UNKNOWN")
+        """
         return {
             "lat": lat,
             "lon": lon,
             "accuracy": accuracy,
             "timestamp": time.time(),
+            "fix_quality": fix_quality,
         }
 
 
@@ -50,19 +108,32 @@ class LocationProvider:
 class ManualLocation(LocationProvider):
     """
     Fixed coordinates for testing without GPS hardware.
-    accuracy is reported as 0.0 (exact) so routing works,
-    but the user must understand this is a manually set position.
+    
+    ⚠️ WARNING: This is for TESTING ONLY. Do NOT use in production navigation.
+    
+    The accuracy is reported as 0.0 (exact) and fix_quality as "MANUAL"
+    so the navigation system knows this is not real GPS data.
+    
+    Args:
+        lat: Latitude in decimal degrees
+        lon: Longitude in decimal degrees
+        name: Optional human-readable name for logging
     """
 
-    def __init__(self, lat: float, lon: float):
+    def __init__(self, lat: float, lon: float, name: str = "Manual Test Location"):
+        self.validate_coordinates(lat, lon)
         self._lat = lat
         self._lon = lon
+        self._name = name
+        print(f"[LOCATION] ⚠️  Using MANUAL location: {name} ({lat:.4f}, {lon:.4f})")
+        print(f"[LOCATION] ⚠️  This is for TESTING ONLY. Real navigation requires GPS.")
 
     def get_location(self) -> dict:
-        return self._make_result(self._lat, self._lon, accuracy=0.0)
+        return self._make_result(self._lat, self._lon, accuracy=0.0, fix_quality="MANUAL")
 
     def update(self, lat: float, lon: float):
         """Allow live update (e.g. from test script simulating movement)."""
+        self.validate_coordinates(lat, lon)
         self._lat = lat
         self._lon = lon
 
@@ -72,83 +143,164 @@ class ManualLocation(LocationProvider):
 class GPSSerialLocation(LocationProvider):
     """
     Reads NMEA sentences from a serial GPS module (USB/Bluetooth/ESP32).
-    Parses $GPRMC and $GPGGA sentences.
+    Parses $GPRMC and $GPGGA sentences with validation.
+
+    Features:
+    - Coordinate validation
+    - Stale fix detection
+    - GPS jump protection
+    - Fix quality tracking
+    - Accuracy estimation from HDOP
 
     Args:
         port:     Serial port path, e.g. "/dev/ttyUSB0" or "/dev/cu.usbserial-0001"
         baudrate: GPS baud rate (most modules: 9600)
         timeout:  Seconds to wait for a valid fix before raising LocationUnavailableError
+        stale_threshold: Seconds before a fix is considered stale
+        max_jump_distance: Maximum allowed position jump in meters (protects against GPS glitches)
     """
 
-    def __init__(self, port: str, baudrate: int = 9600, timeout: float = 10.0):
+    def __init__(
+        self,
+        port: str,
+        baudrate: int = 9600,
+        timeout: float = 10.0,
+        stale_threshold: float = 5.0,
+        max_jump_distance: float = 500.0,
+    ):
         self._port = port
         self._baudrate = baudrate
         self._timeout = timeout
+        self._stale_threshold = stale_threshold
+        self._max_jump_distance = max_jump_distance
+        
         self._lat: Optional[float] = None
         self._lon: Optional[float] = None
         self._accuracy: float = 99.0
+        self._fix_quality: str = "LOST"
         self._ts: float = 0.0
         self._lock = threading.Lock()
         self._running = False
         self._thread: Optional[threading.Thread] = None
+        
+        # Track previous position for jump detection
+        self._prev_lat: Optional[float] = None
+        self._prev_lon: Optional[float] = None
 
     def start(self):
         """Start background NMEA reader thread."""
+        if self._running:
+            return
         self._running = True
         self._thread = threading.Thread(target=self._reader_loop, daemon=True, name="GPSReader")
         self._thread.start()
+        print(f"[GPS] Started GPS reader on {self._port}")
 
     def stop(self):
+        """Stop background GPS reader."""
         self._running = False
+        if self._thread:
+            self._thread.join(timeout=2.0)
+        print("[GPS] GPS reader stopped")
 
     def _reader_loop(self):
         try:
             import serial  # pyserial — optional dep
             ser = serial.Serial(self._port, self._baudrate, timeout=1)
+            print(f"[GPS] Serial port opened: {self._port} @ {self._baudrate} baud")
+            
             while self._running:
-                line = ser.readline().decode("ascii", errors="replace").strip()
-                self._parse_nmea(line)
+                try:
+                    line = ser.readline().decode("ascii", errors="replace").strip()
+                    if line:
+                        self._parse_nmea(line)
+                except Exception as e:
+                    # Don't crash on individual parse errors
+                    pass
+                    
+            ser.close()
+            
         except ImportError:
-            print("[GPS] pyserial not installed. Install with: pip install pyserial")
+            print("[GPS] ❌ pyserial not installed. Install with: pip install pyserial")
+            self._running = False
+        except serial.SerialException as e:
+            print(f"[GPS] ❌ Serial port error: {e}")
+            print(f"[GPS] Check that {self._port} exists and is not in use by another program.")
             self._running = False
         except Exception as e:
-            print(f"[GPS] Serial error: {e}")
+            print(f"[GPS] ❌ GPS reader error: {e}")
             self._running = False
 
     def _parse_nmea(self, sentence: str):
-        """Parse $GPRMC or $GPGGA sentences."""
+        """Parse $GPRMC or $GPGGA sentences with validation."""
         try:
             if sentence.startswith("$GPRMC"):
                 parts = sentence.split(",")
                 if len(parts) < 7 or parts[2] != "A":  # A = valid fix
+                    self._update_fix_quality("LOST")
                     return
+                    
                 lat = self._nmea_coord(parts[3], parts[4])
                 lon = self._nmea_coord(parts[5], parts[6])
+                
                 if lat is not None and lon is not None:
-                    with self._lock:
-                        self._lat, self._lon = lat, lon
-                        self._accuracy = 15.0  # typical consumer GPS
-                        self._ts = time.time()
+                    self._update_position(lat, lon, accuracy=15.0, fix_quality="FIXED")
 
             elif sentence.startswith("$GPGGA"):
                 parts = sentence.split(",")
                 if len(parts) < 10 or parts[6] == "0":  # fix quality 0 = invalid
+                    self._update_fix_quality("LOST")
                     return
+                    
                 lat = self._nmea_coord(parts[2], parts[3])
                 lon = self._nmea_coord(parts[4], parts[5])
                 hdop = float(parts[8]) if parts[8] else 99.0
+                
                 if lat is not None and lon is not None:
-                    with self._lock:
-                        self._lat, self._lon = lat, lon
-                        self._accuracy = hdop * 5.0  # rough accuracy estimate in meters
-                        self._ts = time.time()
-        except Exception:
+                    # Estimate accuracy from HDOP (horizontal dilution of precision)
+                    # HDOP < 2 = excellent, 2-5 = good, 5-10 = moderate, >10 = poor
+                    accuracy = hdop * 5.0  # rough estimate in meters
+                    fix_quality = "FIXED" if hdop < 5.0 else "WEAK"
+                    self._update_position(lat, lon, accuracy=accuracy, fix_quality=fix_quality)
+                    
+        except Exception as e:
+            # Ignore malformed sentences
             pass
+
+    def _update_position(self, lat: float, lon: float, accuracy: float, fix_quality: str):
+        """Update position with validation and jump detection."""
+        try:
+            # Validate coordinates
+            self.validate_coordinates(lat, lon)
+            
+            # Check for unrealistic GPS jumps (protects against glitches)
+            if self._prev_lat is not None and self._prev_lon is not None:
+                distance = self.haversine_distance(self._prev_lat, self._prev_lon, lat, lon)
+                if distance > self._max_jump_distance:
+                    print(f"[GPS] ⚠️  Rejected position jump of {distance:.0f}m (max: {self._max_jump_distance:.0f}m)")
+                    return
+            
+            # Valid position - update state
+            with self._lock:
+                self._lat, self._lon = lat, lon
+                self._accuracy = accuracy
+                self._fix_quality = fix_quality
+                self._ts = time.time()
+                self._prev_lat, self._prev_lon = lat, lon
+                
+        except InvalidCoordinateError as e:
+            print(f"[GPS] ⚠️  Invalid coordinates rejected: {e}")
+            self._update_fix_quality("INVALID")
+
+    def _update_fix_quality(self, quality: str):
+        """Update fix quality without changing position."""
+        with self._lock:
+            self._fix_quality = quality
 
     @staticmethod
     def _nmea_coord(raw: str, direction: str) -> Optional[float]:
         """Convert NMEA ddmm.mmmm format to decimal degrees."""
-        if not raw:
+        if not raw or not direction:
             return None
         try:
             dot = raw.index(".")
@@ -162,16 +314,60 @@ class GPSSerialLocation(LocationProvider):
             return None
 
     def get_location(self) -> dict:
+        """
+        Get current GPS location with staleness and quality checks.
+        
+        Raises:
+            LocationUnavailableError: If no fix available within timeout
+            StaleLocationError: If fix is too old
+        """
         deadline = time.time() + self._timeout
+        
         while time.time() < deadline:
             with self._lock:
+                # Check if we have a position
                 if self._lat is not None and self._lon is not None:
-                    return self._make_result(self._lat, self._lon, self._accuracy)
+                    # Check staleness
+                    age = time.time() - self._ts
+                    if age > self._stale_threshold:
+                        raise StaleLocationError(
+                            f"GPS fix is {age:.1f}s old (stale threshold: {self._stale_threshold}s). "
+                            "GPS may have lost signal."
+                        )
+                    
+                    # Check fix quality
+                    if self._fix_quality in ("LOST", "INVALID"):
+                        continue  # Keep waiting for valid fix
+                    
+                    return self._make_result(
+                        self._lat, self._lon, 
+                        self._accuracy, 
+                        self._fix_quality
+                    )
+            
             time.sleep(0.2)
+        
+        # Timeout reached
+        with self._lock:
+            quality = self._fix_quality
+            
         raise LocationUnavailableError(
             f"GPS serial port {self._port}: no valid fix within {self._timeout}s. "
-            "Check cable/port and that the GPS module has sky visibility."
+            f"Current status: {quality}. "
+            "Check cable/port and that the GPS module has clear sky visibility."
         )
+
+    def get_status(self) -> dict:
+        """Get current GPS status without raising exceptions."""
+        with self._lock:
+            age = time.time() - self._ts if self._ts > 0 else float('inf')
+            return {
+                "has_fix": self._lat is not None and self._lon is not None,
+                "fix_quality": self._fix_quality,
+                "accuracy": self._accuracy,
+                "age_seconds": age,
+                "is_stale": age > self._stale_threshold,
+            }
 
 
 # ── HTTP Bridge (phone GPS) ───────────────────────────────────────────────────
@@ -182,6 +378,10 @@ class LocationBridge(LocationProvider):
     Useful when a phone runs a GPS-to-HTTP bridge app on the same Wi-Fi.
 
     The endpoint must return JSON: {"lat": ..., "lon": ..., "accuracy": ...}
+    
+    Args:
+        url: HTTP endpoint URL
+        timeout: Request timeout in seconds
     """
 
     def __init__(self, url: str = "http://192.168.4.1:8080/gps", timeout: float = 3.0):
@@ -194,13 +394,69 @@ class LocationBridge(LocationProvider):
         try:
             with urllib.request.urlopen(self._url, timeout=self._timeout) as resp:
                 data = json.loads(resp.read().decode())
+                lat = float(data["lat"])
+                lon = float(data["lon"])
+                
+                # Validate coordinates
+                self.validate_coordinates(lat, lon)
+                
                 return self._make_result(
-                    float(data["lat"]),
-                    float(data["lon"]),
+                    lat, lon,
                     float(data.get("accuracy", 10.0)),
+                    fix_quality="BRIDGE"
                 )
+        except InvalidCoordinateError as e:
+            raise LocationUnavailableError(f"Invalid coordinates from GPS bridge: {e}")
         except Exception as e:
             raise LocationUnavailableError(f"GPS bridge at {self._url} unreachable: {e}")
+
+
+# ── Mock Location Provider (for automated testing) ────────────────────────────
+
+class MockLocationProvider(LocationProvider):
+    """
+    Mock location provider for automated testing.
+    Can simulate movement along a predefined path.
+    
+    Args:
+        waypoints: List of (lat, lon) tuples representing a path
+        speed_mps: Simulated movement speed in meters per second
+        loop: Whether to loop back to start after reaching the end
+    """
+    
+    def __init__(self, waypoints: list[tuple[float, float]], speed_mps: float = 1.4, loop: bool = False):
+        if not waypoints:
+            raise ValueError("MockLocationProvider requires at least one waypoint")
+        
+        # Validate all waypoints
+        for lat, lon in waypoints:
+            self.validate_coordinates(lat, lon)
+        
+        self._waypoints = waypoints
+        self._speed_mps = speed_mps
+        self._loop = loop
+        self._current_index = 0
+        self._start_time = time.time()
+        print(f"[LOCATION] 🧪 Using MOCK location provider with {len(waypoints)} waypoints")
+    
+    def get_location(self) -> dict:
+        """Get current mock location based on elapsed time and speed."""
+        lat, lon = self._waypoints[self._current_index]
+        return self._make_result(lat, lon, accuracy=5.0, fix_quality="MOCK")
+    
+    def advance(self):
+        """Advance to next waypoint."""
+        self._current_index += 1
+        if self._current_index >= len(self._waypoints):
+            if self._loop:
+                self._current_index = 0
+            else:
+                self._current_index = len(self._waypoints) - 1
+    
+    def reset(self):
+        """Reset to first waypoint."""
+        self._current_index = 0
+        self._start_time = time.time()
 
 
 # ── CLI test mode ─────────────────────────────────────────────────────────────

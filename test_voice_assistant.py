@@ -3,9 +3,8 @@ import sys
 import numpy as np
 import time
 
-# Guarantee working directory is script directory
+# Get script directory for path resolution (DO NOT change working directory)
 SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
-os.chdir(SCRIPT_DIR)
 
 print("=" * 65)
 print("     SURDAS VOICE ASSISTANT COMPREHENSIVE TEST SUITE")
