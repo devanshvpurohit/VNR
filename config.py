@@ -44,19 +44,27 @@ YOLO_MODEL_FALLBACK = "yolov8n.pt"  # Stock model fallback
 # ─────────────────────────────────────────────────────────────────────────────
 # VISION - MIDAS DEPTH ESTIMATION SETTINGS
 # ─────────────────────────────────────────────────────────────────────────────
-# IMPORTANT: MiDaS produces RELATIVE depth, NOT metric distance
-# These thresholds are based on empirical observation and should be tuned per deployment
+# IMPORTANT: MiDaS produces RELATIVE inverse depth, NOT metric distance
+# Higher values = closer to camera
+# These thresholds are based on typical MiDaS_small output range (~200-600)
 
 # Depth thresholds (higher value = closer to camera in MiDaS output)
-DEPTH_VERY_CLOSE_THRESHOLD = float(os.getenv("SURDAS_DEPTH_VERY_CLOSE", "1200"))
-DEPTH_CLOSE_THRESHOLD = float(os.getenv("SURDAS_DEPTH_CLOSE", "650"))
-DEPTH_MEDIUM_THRESHOLD = float(os.getenv("SURDAS_DEPTH_MEDIUM", "300"))
-# Below MEDIUM = FAR
+# Typical MiDaS range: 200-600, mean ~400
+DEPTH_VERY_CLOSE_THRESHOLD = float(os.getenv("SURDAS_DEPTH_VERY_CLOSE", "480"))  # Top 20% = very close
+DEPTH_CLOSE_THRESHOLD = float(os.getenv("SURDAS_DEPTH_CLOSE", "420"))            # Top 40% = close
+DEPTH_MEDIUM_THRESHOLD = float(os.getenv("SURDAS_DEPTH_MEDIUM", "360"))          # Top 60% = medium
+# Below 360 = FAR
 
-# Wall detection thresholds
-DEPTH_WALL_DENSE_THRESHOLD = float(os.getenv("SURDAS_DEPTH_WALL_DENSE", "950"))
+# Wall detection thresholds (for dense depth analysis)
+DEPTH_WALL_DENSE_THRESHOLD = float(os.getenv("SURDAS_DEPTH_WALL_DENSE", "450"))
 DEPTH_WALL_CENTER_RATIO = float(os.getenv("SURDAS_DEPTH_WALL_RATIO", "0.38"))
-DEPTH_WALL_IMMEDIATE_THRESHOLD = float(os.getenv("SURDAS_DEPTH_WALL_IMMEDIATE", "1150"))
+DEPTH_WALL_IMMEDIATE_THRESHOLD = float(os.getenv("SURDAS_DEPTH_WALL_IMMEDIATE", "500"))
+
+# Adaptive depth normalization (automatically adjust to observed range)
+DEPTH_ADAPTIVE_NORMALIZATION = os.getenv("SURDAS_DEPTH_ADAPTIVE", "true").lower() == "true"
+DEPTH_PERCENTILE_VERY_CLOSE = 80  # 80th percentile = very close
+DEPTH_PERCENTILE_CLOSE = 60       # 60th percentile = close
+DEPTH_PERCENTILE_MEDIUM = 40      # 40th percentile = medium
 
 # MiDaS model paths
 MIDAS_MODEL_PATH = str(MODELS_DIR / "midas_small_india_ft.pt")
@@ -187,8 +195,10 @@ def classify_depth_proximity(depth_value: float) -> str:
     """
     Classify MiDaS relative depth into human-readable proximity category.
     
-    IMPORTANT: depth_value is RELATIVE, not metric distance.
+    IMPORTANT: depth_value is RELATIVE inverse depth, not metric distance.
     Higher values = closer to camera.
+    
+    MiDaS_small typically outputs values in range ~200-600, with mean ~400.
     
     Args:
         depth_value: Raw MiDaS depth value
@@ -201,6 +211,35 @@ def classify_depth_proximity(depth_value: float) -> str:
     elif depth_value >= DEPTH_CLOSE_THRESHOLD:
         return "CLOSE"
     elif depth_value >= DEPTH_MEDIUM_THRESHOLD:
+        return "MEDIUM"
+    else:
+        return "FAR"
+
+
+def classify_depth_proximity_adaptive(depth_value: float, depth_map) -> str:
+    """
+    Classify depth using adaptive percentile-based thresholds.
+    Automatically adjusts to the actual depth distribution in the scene.
+    
+    Args:
+        depth_value: Raw MiDaS depth value to classify
+        depth_map: Full depth map (numpy array) for computing percentiles
+        
+    Returns:
+        Proximity category: "VERY_CLOSE", "CLOSE", "MEDIUM", or "FAR"
+    """
+    import numpy as np
+    
+    # Compute percentile thresholds from actual depth distribution
+    p_very_close = np.percentile(depth_map, DEPTH_PERCENTILE_VERY_CLOSE)
+    p_close = np.percentile(depth_map, DEPTH_PERCENTILE_CLOSE)
+    p_medium = np.percentile(depth_map, DEPTH_PERCENTILE_MEDIUM)
+    
+    if depth_value >= p_very_close:
+        return "VERY_CLOSE"
+    elif depth_value >= p_close:
+        return "CLOSE"
+    elif depth_value >= p_medium:
         return "MEDIUM"
     else:
         return "FAR"

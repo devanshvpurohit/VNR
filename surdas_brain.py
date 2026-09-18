@@ -463,8 +463,12 @@ class SurdasBrain:
             crop_depth = raw_depth[max(0, y1):min(h, y2), max(0, x1):min(w, x2)]
             med_depth = np.median(crop_depth) if crop_depth.size > 0 else 0
 
-            # Classify relative proximity using config thresholds
-            proximity = classify_depth_proximity(med_depth)
+            # Classify relative proximity using adaptive or fixed thresholds
+            if DEPTH_ADAPTIVE_NORMALIZATION and raw_depth.size > 0:
+                proximity = classify_depth_proximity_adaptive(med_depth, raw_depth)
+            else:
+                proximity = classify_depth_proximity(med_depth)
+            
             proximity_desc = get_proximity_description(proximity, lang="en")
             
             # Color coding based on proximity
