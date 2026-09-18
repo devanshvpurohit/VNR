@@ -36,10 +36,16 @@ _parser.add_argument(
     metavar="GAIN",
     help="Software gain multiplier for microphone (e.g. 1.5, 2.0, 2.5 for quiet TWS). Defaults to 1.8x for TWS.",
 )
+_parser.add_argument(
+    "--gui",
+    action="store_true",
+    help="Launch PyQt5 desktop GUI instead of OpenCV window.",
+)
 _args, _ = _parser.parse_known_args()
 LLM_MODEL = _args.model  # empty string = use LocalLLM default (gemma3:1b)
 MIC_DEVICE = _args.mic
 MIC_GAIN = _args.mic_gain
+USE_GUI = _args.gui
 
 # Get script directory for path resolution (DO NOT change working directory)
 SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
@@ -559,5 +565,32 @@ class SurdasWebcamTester:
 
 
 if __name__ == "__main__":
-    tester = SurdasWebcamTester()
-    tester.run()
+    if USE_GUI:
+        # Launch PyQt5 GUI with test pipeline
+        print("[SYSTEM] Launching PyQt5 desktop GUI for AI test pipeline...")
+        try:
+            from PyQt5.QtWidgets import QApplication
+            from surdas_gui import SurdasGUI
+            
+            app = QApplication(sys.argv)
+            app.setApplicationName("SURDAS Test Pipeline")
+            app.setApplicationVersion("2.0")
+            app.setOrganizationName("VNR")
+            
+            # Create GUI and auto-start the system
+            window = SurdasGUI()
+            window.show()
+            
+            # Note: In GUI mode, user must click "Start System" button
+            print("[INFO] Click '▶️ Start System' button to begin testing...")
+            
+            sys.exit(app.exec_())
+        except ImportError:
+            print("[ERROR] PyQt5 not installed. Install with: pip3 install PyQt5>=5.15.0")
+            print("[INFO] Falling back to OpenCV window mode...")
+            tester = SurdasWebcamTester()
+            tester.run()
+    else:
+        # OpenCV window mode (original behavior)
+        tester = SurdasWebcamTester()
+        tester.run()

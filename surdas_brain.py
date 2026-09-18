@@ -36,10 +36,16 @@ _parser.add_argument(
     metavar="GAIN",
     help="Software gain multiplier for microphone (e.g. 1.5, 2.0, 2.5 for quiet TWS). Defaults to 1.8x for TWS.",
 )
+_parser.add_argument(
+    "--gui",
+    action="store_true",
+    help="Launch PyQt5 desktop GUI instead of terminal mode.",
+)
 _args, _ = _parser.parse_known_args()
 LLM_MODEL = _args.model  # empty string = use LocalLLM default (gemma3:1b)
 MIC_DEVICE = _args.mic
 MIC_GAIN = _args.mic_gain
+USE_GUI = _args.gui
 
 # Get script directory for path resolution (DO NOT change working directory)
 SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
@@ -752,5 +758,28 @@ class SurdasBrain:
 
 
 if __name__ == "__main__":
-    brain = SurdasBrain()
-    brain.run()
+    if USE_GUI:
+        # Launch PyQt5 GUI
+        print("[SYSTEM] Launching PyQt5 desktop GUI...")
+        try:
+            from PyQt5.QtWidgets import QApplication
+            from surdas_gui import SurdasGUI
+            
+            app = QApplication(sys.argv)
+            app.setApplicationName("SURDAS")
+            app.setApplicationVersion("2.0")
+            app.setOrganizationName("VNR")
+            
+            window = SurdasGUI()
+            window.show()
+            
+            sys.exit(app.exec_())
+        except ImportError:
+            print("[ERROR] PyQt5 not installed. Install with: pip3 install PyQt5>=5.15.0")
+            print("[INFO] Falling back to terminal mode...")
+            brain = SurdasBrain()
+            brain.run()
+    else:
+        # Terminal mode
+        brain = SurdasBrain()
+        brain.run()

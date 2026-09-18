@@ -20,9 +20,17 @@ SURDAS offers two modern interfaces for different use cases:
 **Modern native desktop application with real-time monitoring**
 
 ```bash
+# Quick launch with GUI
 ./launch_gui.sh
-# or
-python3 surdas_gui.py
+
+# Or launch directly from surdas_brain.py
+python3 surdas_brain.py --gui
+
+# Or from test pipeline
+python3 test_ai_pipeline.py --gui
+
+# With custom model and audio settings
+python3 surdas_brain.py --gui --model gemma3:1b --mic airpods --mic-gain 2.0
 ```
 
 **Features**:
@@ -36,6 +44,43 @@ python3 surdas_gui.py
 - 🖱️ Native desktop experience with Qt5
 
 **Requirements**: `PyQt5>=5.15.0` (auto-installed by launcher)
+
+### CLI Arguments
+
+Both `surdas_brain.py` and `test_ai_pipeline.py` support the following arguments:
+
+```bash
+# Launch with GUI
+python3 surdas_brain.py --gui
+
+# Specify LLM model
+python3 surdas_brain.py --model gemma3:1b
+
+# Specify microphone device
+python3 surdas_brain.py --mic airpods
+python3 surdas_brain.py --mic boat
+python3 surdas_brain.py --mic 0  # Device index
+
+# Adjust microphone gain
+python3 surdas_brain.py --mic-gain 2.0
+
+# Combine arguments
+python3 surdas_brain.py --gui --model gemma3:1b --mic airpods --mic-gain 2.0
+python3 test_ai_pipeline.py --gui --mic boat --mic-gain 1.5
+```
+
+**Terminal Mode (Default)**:
+```bash
+python3 surdas_brain.py              # OpenCV window
+python3 test_ai_pipeline.py          # OpenCV window
+```
+
+**GUI Mode**:
+```bash
+python3 surdas_brain.py --gui        # PyQt5 GUI
+python3 test_ai_pipeline.py --gui    # PyQt5 GUI
+./launch_gui.sh                      # Convenience script
+```
 
 ### 2. Web-Based Caregiver Dashboard
 **React + TypeScript dashboard for remote monitoring**
