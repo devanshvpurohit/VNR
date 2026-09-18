@@ -27,7 +27,7 @@ interface SpatialMemory {
 interface LogEntry {
   id: number;
   time: string;
-  type: 'speech' | 'alert' | 'system' | 'navigation';
+  type: 'speech' | 'alert' | 'system' | 'navigation' | 'fall';
   message: string;
 }
 
@@ -37,6 +37,26 @@ interface Location {
   city: string;
   region: string;
   country: string;
+}
+
+interface FallDetectorData {
+  ax: number;
+  ay: number;
+  az: number;
+  acceleration: number;
+  pitch: number;
+  roll: number;
+  falls: number;
+  state: 'NORMAL' | 'POSSIBLE_FALL' | 'IMPACT_DETECTED' | 'FALL_CONFIRMED';
+  mpu: 'OK' | 'ERROR';
+}
+
+interface ControllerStatus {
+  device: string;
+  ip: string;
+  wifi: string;
+  mpu: string;
+  falls: number;
 }
 
 // ──────────── SVG Icons ────────────
@@ -103,9 +123,22 @@ const TargetIcon = () => (
     <circle cx="12" cy="12" r="2" />
   </svg>
 );
+const AlertTriangleIcon = () => (
+  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+    <path d="m21.73 18-8-14a2 2 0 0 0-3.48 0l-8 14A2 2 0 0 0 4 21h16a2 2 0 0 0 1.73-3Z"/>
+    <line x1="12" y1="9" x2="12" y2="13"/>
+    <line x1="12" y1="17" x2="12.01" y2="17"/>
+  </svg>
+);
+const ActivityIcon = () => (
+  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+    <polyline points="22 12 18 12 15 21 9 3 6 12 2 12"/>
+  </svg>
+);
 
 const API = 'http://localhost:8000';
 const WS  = 'ws://localhost:8000/ws';
+const CONTROLLER_IP = '192.168.4.2';  // ESP32 Controller
 
 // ──────────── Main App ────────────
 function App() {
@@ -115,15 +148,63 @@ function App() {
   const [logs, setLogs] = useState<LogEntry[]>([]);
   const [location, setLocation] = useState<Location | null>(null);
   const [wsState, setWsState] = useState<'connecting' | 'connected' | 'disconnected'>('connecting');
+  
+  // Fall detector state
+  const [fallData, setFallData] = useState<FallDetectorData | null>(null);
+  const [controllerStatus, setControllerStatus] = useState<ControllerStatus | null>(null);
+  const [controllerConnected, setControllerConnected] = useState(false);
+  
   const wsRef = useRef<WebSocket | null>(null);
   const prevWallRef = useRef(false);
   const reconnectTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const fallPollInterval = useRef<ReturnType<typeof setInterval> | null>(null);
 
   const addLog = (type: LogEntry['type'], message: string) => {
     setLogs(prev => [
       { id: Date.now() + Math.random(), time: new Date().toLocaleTimeString(), type, message },
       ...prev,
     ].slice(0, 100));
+  };
+
+  // Fetch fall detector data
+  const fetchFallData = async () => {
+    try {
+      const response = await fetch(`http://${CONTROLLER_IP}/imu`, { 
+        signal: AbortSignal.timeout(2000) 
+      });
+      const data = await response.json();
+      
+      setFallData(data);
+      setControllerConnected(true);
+      
+      // Alert on fall detection
+      if (data.state === 'FALL_CONFIRMED' && (!fallData || fallData.state !== 'FALL_CONFIRMED')) {
+        addLog('fall', `🚨 FALL DETECTED! Total falls: ${data.falls}`);
+      } else if (data.state === 'POSSIBLE_FALL') {
+        addLog('fall', '⚠️ Possible fall detected - monitoring...');
+      } else if (data.state === 'IMPACT_DETECTED') {
+        addLog('fall', '💥 Impact detected - analyzing orientation...');
+      }
+    } catch (error) {
+      if (controllerConnected) {
+        setControllerConnected(false);
+        addLog('system', 'Fall detector disconnected');
+      }
+      setFallData(null);
+    }
+  };
+
+  // Fetch controller status
+  const fetchControllerStatus = async () => {
+    try {
+      const response = await fetch(`http://${CONTROLLER_IP}/status`, {
+        signal: AbortSignal.timeout(2000)
+      });
+      const data = await response.json();
+      setControllerStatus(data);
+    } catch (error) {
+      setControllerStatus(null);
+    }
   };
 
   // Fetch location once
@@ -186,8 +267,20 @@ function App() {
 
   useEffect(() => {
     connect();
+    
+    // Start fall detector polling
+    fetchFallData();
+    fetchControllerStatus();
+    fallPollInterval.current = setInterval(() => {
+      fetchFallData();
+      if (Math.random() < 0.1) { // Status every ~2 seconds
+        fetchControllerStatus();
+      }
+    }, 200);
+    
     return () => {
       if (reconnectTimer.current) clearTimeout(reconnectTimer.current);
+      if (fallPollInterval.current) clearInterval(fallPollInterval.current);
       if (wsRef.current) { wsRef.current.onclose = null; wsRef.current.close(); }
     };
   }, []);
