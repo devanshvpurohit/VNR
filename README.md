@@ -16,7 +16,7 @@ SURDAS is an AI-assisted perception and voice assistant for low-cost visually-im
 
 SURDAS offers two modern interfaces for different use cases:
 
-### 1. PyQt5 Desktop GUI (New!)
+### 1. Tkinter Desktop GUI (New!)
 **Modern native desktop application with real-time monitoring**
 
 ```bash
@@ -41,9 +41,9 @@ python3 surdas_brain.py --gui --model gemma3:1b --mic airpods --mic-gain 2.0
 - 📊 Real-time statistics (FPS, object count, uptime)
 - 🧠 Spatial memory display (rooms & landmarks)
 - 📜 Color-coded activity logs with timestamps
-- 🖱️ Native desktop experience with Qt5
+- 🖱️ Native desktop experience with tkinter (built-in Python)
 
-**Requirements**: `PyQt5>=5.15.0` (auto-installed by launcher)
+**Requirements**: `Pillow>=10.0.0` (for image display; tkinter is built into Python)
 
 ### CLI Arguments
 
@@ -75,10 +75,10 @@ python3 surdas_brain.py              # OpenCV window
 python3 test_ai_pipeline.py          # OpenCV window
 ```
 
-**GUI Mode**:
+**GUI Mode (Tkinter)**:
 ```bash
-python3 surdas_brain.py --gui        # PyQt5 GUI
-python3 test_ai_pipeline.py --gui    # PyQt5 GUI
+python3 surdas_brain.py --gui        # Tkinter GUI
+python3 test_ai_pipeline.py --gui    # Tkinter GUI
 ./launch_gui.sh                      # Convenience script
 ```
 

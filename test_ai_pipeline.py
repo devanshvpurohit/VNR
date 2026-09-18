@@ -566,27 +566,22 @@ class SurdasWebcamTester:
 
 if __name__ == "__main__":
     if USE_GUI:
-        # Launch PyQt5 GUI with test pipeline
-        print("[SYSTEM] Launching PyQt5 desktop GUI for AI test pipeline...")
+        # Launch Tkinter GUI with test pipeline
+        print("[SYSTEM] Launching Tkinter desktop GUI for AI test pipeline...")
         try:
-            from PyQt5.QtWidgets import QApplication
-            from surdas_gui import SurdasGUI
+            from tkinter import Tk
+            from surdas_gui_tk import SurdasGUI
             
-            app = QApplication(sys.argv)
-            app.setApplicationName("SURDAS Test Pipeline")
-            app.setApplicationVersion("2.0")
-            app.setOrganizationName("VNR")
-            
-            # Create GUI and auto-start the system
-            window = SurdasGUI()
-            window.show()
+            root = Tk()
+            app = SurdasGUI(root)
+            root.protocol("WM_DELETE_WINDOW", app.on_closing)
             
             # Note: In GUI mode, user must click "Start System" button
             print("[INFO] Click '▶️ Start System' button to begin testing...")
             
-            sys.exit(app.exec_())
-        except ImportError:
-            print("[ERROR] PyQt5 not installed. Install with: pip3 install PyQt5>=5.15.0")
+            root.mainloop()
+        except ImportError as e:
+            print(f"[ERROR] Tkinter or PIL not available: {e}")
             print("[INFO] Falling back to OpenCV window mode...")
             tester = SurdasWebcamTester()
             tester.run()

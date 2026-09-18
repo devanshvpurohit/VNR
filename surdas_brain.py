@@ -759,23 +759,18 @@ class SurdasBrain:
 
 if __name__ == "__main__":
     if USE_GUI:
-        # Launch PyQt5 GUI
-        print("[SYSTEM] Launching PyQt5 desktop GUI...")
+        # Launch Tkinter GUI
+        print("[SYSTEM] Launching Tkinter desktop GUI...")
         try:
-            from PyQt5.QtWidgets import QApplication
-            from surdas_gui import SurdasGUI
+            from tkinter import Tk
+            from surdas_gui_tk import SurdasGUI
             
-            app = QApplication(sys.argv)
-            app.setApplicationName("SURDAS")
-            app.setApplicationVersion("2.0")
-            app.setOrganizationName("VNR")
-            
-            window = SurdasGUI()
-            window.show()
-            
-            sys.exit(app.exec_())
-        except ImportError:
-            print("[ERROR] PyQt5 not installed. Install with: pip3 install PyQt5>=5.15.0")
+            root = Tk()
+            app = SurdasGUI(root)
+            root.protocol("WM_DELETE_WINDOW", app.on_closing)
+            root.mainloop()
+        except ImportError as e:
+            print(f"[ERROR] Tkinter or PIL not available: {e}")
             print("[INFO] Falling back to terminal mode...")
             brain = SurdasBrain()
             brain.run()
