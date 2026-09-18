@@ -500,8 +500,12 @@ class SurdasGUI:
                 
             # Update status badge based on activity
             if self.brain.mode != "IDLE":
-                if hasattr(self.brain, 'indoor_navigator') and self.brain.indoor_navigator.state == "NAVIGATING":
-                    self.update_status("navigating")
+                if hasattr(self.brain, 'indoor_navigator') and self.brain.indoor_navigator:
+                    nav_status = self.brain.indoor_navigator.get_status()
+                    if nav_status.state.name == "NAVIGATING":
+                        self.update_status("navigating")
+                    else:
+                        self.update_status("active")
                 else:
                     self.update_status("active")
             else:
