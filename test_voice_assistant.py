@@ -67,7 +67,7 @@ try:
         class MockVoice:
             def __init__(self, parent):
                 self.parent = parent
-            def speak(self, text, force=False):
+            def speak(self, text, force=False, **kwargs):
                 self.parent.spoken_messages.append(text)
                 
         def __init__(self):

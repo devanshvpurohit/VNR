@@ -11,3 +11,7 @@ ollama
 faster-whisper
 silero
 openwakeword
+
+osmnx
+shapely
+networkx

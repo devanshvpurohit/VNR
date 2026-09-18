@@ -1,8 +1,17 @@
+"""
+llm.py — Local LLM client for SURDAS via Ollama.
+
+Changes from original:
+  • system_prompt updated with bilingual instruction.
+  • query() gains lang: str = "en" parameter, prepended to context header.
+  • Streaming / clause splitting logic unchanged.
+"""
 import json
 import urllib.request
 import urllib.error
 import re
 from typing import Iterator, List
+
 
 class LocalLLM:
     """
@@ -15,7 +24,7 @@ class LocalLLM:
     DEFAULT_MODEL = "gemma3:1b"
 
     def __init__(self, model_name: str = "", host: str = "http://localhost:11434"):
-        self.host = host.rstrip('/')
+        self.host = host.rstrip("/")
         self.model_name = model_name or self.DEFAULT_MODEL
         self._build_system_prompt()
 
@@ -23,10 +32,13 @@ class LocalLLM:
         self.system_prompt = (
             "You are SURDAS, an AI voice assistant for visually impaired users. "
             "Give clear, factual, and concise answers in 1 to 2 spoken sentences. "
-            "Never use markdown, bullet points, asterisks, or lists. Plain conversational English only."
+            "Never use markdown, bullet points, asterisks, or lists. Plain conversational text only. "
+            "Detect the language of the user's message (English or Hindi) and reply in that same language. "
+            "If Hindi, reply in Devanagari script, natural spoken Hindi, 1-2 short sentences, "
+            "no English unless a proper noun requires it."
         )
 
-    # ── Model management ───────────────────────────────────────────────────
+    # ── Model management ────────────────────────────────────────────────────
 
     def is_available(self) -> bool:
         """Check if Ollama server is running locally."""
@@ -43,8 +55,7 @@ class LocalLLM:
             req = urllib.request.Request(f"{self.host}/api/tags", method="GET")
             with urllib.request.urlopen(req, timeout=2.5) as resp:
                 data = json.loads(resp.read().decode("utf-8"))
-                models = [m["name"] for m in data.get("models", [])]
-                return models
+                return [m["name"] for m in data.get("models", [])]
         except Exception as e:
             print(f"[LLM] Could not fetch model list: {e}")
             return []
@@ -76,16 +87,30 @@ class LocalLLM:
         clean = [m.replace(":latest", "") for m in models]
         return f"Installed models: {', '.join(clean)}."
 
-    # ── Query ──────────────────────────────────────────────────────────────
+    # ── Query ───────────────────────────────────────────────────────────────
 
-    def query(self, user_prompt: str, vision_context: dict = None) -> Iterator[str]:
+    def query(
+        self,
+        user_prompt: str,
+        vision_context: dict = None,
+        lang: str = "en",
+    ) -> Iterator[str]:
         """
         Fast stream response from Ollama.
         Yields short clauses/sentences immediately for instant TTS response.
+
+        Args:
+            user_prompt:    The user's spoken question/command.
+            vision_context: Optional scene state dict from SurdasBrain.
+            lang:           "en" or "hi" — pinned in the context header so
+                            small local models respond more reliably in the
+                            correct language.
         """
         import datetime
+
         now_str = datetime.datetime.now().strftime("%A, %I:%M %p")
-        context_parts = [f"Time: {now_str}"]
+        lang_label = "Hindi" if lang == "hi" else "English"
+        context_parts = [f"Time: {now_str}", f"Language: {lang_label}"]
 
         if vision_context:
             objects = vision_context.get("detected_objects", [])
@@ -96,7 +121,20 @@ class LocalLLM:
                 context_parts.append(f"Obstacle: {closest}")
 
         context_str = f"[{' | '.join(context_parts)}]"
-        full_prompt = f"{context_str}\nUser: {user_prompt}\nAnswer:"
+
+        # Inject navigation context if available
+        nav_ctx = vision_context.get("navigation") if vision_context else None
+        if nav_ctx and nav_ctx.get("active"):
+            nav_info = (
+                f"\n[NAVIGATION]\n"
+                f"Destination: {nav_ctx.get('destination', 'Unknown')}\n"
+                f"Distance remaining: {nav_ctx.get('distance_remaining_m', 0)} m\n"
+                f"Next instruction: {nav_ctx.get('next_instruction', '')}\n"
+                f"[/NAVIGATION]"
+            )
+            full_prompt = f"{context_str}{nav_info}\nUser: {user_prompt}\nAnswer:"
+        else:
+            full_prompt = f"{context_str}\nUser: {user_prompt}\nAnswer:"
 
         payload = {
             "model": self.model_name,
@@ -104,12 +142,12 @@ class LocalLLM:
             "system": self.system_prompt,
             "stream": True,
             "options": {
-                "num_predict": 50,    # 1-2 concise sentences
-                "num_ctx": 512,       # Small KV cache = much faster prompt eval
-                "temperature": 0.2,   # Fast deterministic sampling
+                "num_predict": 80,    # slightly more room for Hindi sentence
+                "num_ctx": 512,
+                "temperature": 0.2,
                 "top_p": 0.9,
                 "top_k": 20,
-            }
+            },
         }
 
         try:
@@ -117,7 +155,7 @@ class LocalLLM:
                 f"{self.host}/api/generate",
                 data=json.dumps(payload).encode("utf-8"),
                 headers={"Content-Type": "application/json"},
-                method="POST"
+                method="POST",
             )
             with urllib.request.urlopen(req, timeout=15.0) as resp:
                 buf = ""
@@ -127,24 +165,23 @@ class LocalLLM:
                     data = json.loads(line.decode("utf-8"))
                     chunk = data.get("response", "")
                     buf += chunk
-                    
-                    # Yield complete clauses or sentences as soon as ready
-                    if any(p in chunk for p in ('.', '!', '?', '\n')):
-                        parts = re.split(r'(?<=[.!?\n])\s+', buf)
+
+                    # Yield complete clauses/sentences as soon as ready
+                    if any(p in chunk for p in (".", "!", "?", "\n", "।")):
+                        parts = re.split(r"(?<=[.!?\n।])\s+", buf)
                         for part in parts[:-1]:
                             cleaned = part.strip()
                             if cleaned:
                                 yield cleaned
                         buf = parts[-1] if parts else ""
-                    elif len(buf.split()) >= 9 and any(p in chunk for p in (',', ';')):
-                        # Yield early clause if buffer has accumulated >8 words
-                        parts = re.split(r'(?<=[,;])\s+', buf)
+                    elif len(buf.split()) >= 9 and any(p in chunk for p in (",", ";")):
+                        parts = re.split(r"(?<=[,;])\s+", buf)
                         if len(parts) > 1:
                             cleaned = parts[0].strip()
                             if cleaned:
                                 yield cleaned
                             buf = " ".join(parts[1:])
-                
+
                 if buf.strip():
                     yield buf.strip()
 

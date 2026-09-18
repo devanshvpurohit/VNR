@@ -2,40 +2,75 @@ import numpy as np
 import torch
 import os
 
+_OFFLINE_MODE = os.environ.get("OFFLINE_MODE", "0") == "1"
+
+
 class VoiceActivityDetector:
     """
     Voice Activity Detector using Silero VAD with fallback to RMS energy detection.
+
+    Offline-first: if the Silero cache directory is not present on disk,
+    we skip the remote torch.hub.load() call entirely and use the
+    energy-based RMS fallback.  The remote fetch path lives ONLY in
+    setup_offline_models.py — never here.
     """
-    def __init__(self, sample_rate: int = 16000, threshold: float = 0.5):
-        self.sample_rate = sample_rate
-        self.threshold = threshold
+
+    # torch.hub typically expands the repo to one of these names.
+    _SILERO_CACHE_CANDIDATES = [
+        "snakers4_silero-vad_master",
+        "snakers4_silero-vad_main",
+        "snakers4_silero-vad_latest",
+    ]
+
+    def __init__(self, sample_rate: int = 16000, threshold: float = 0.25):
+        self.sample_rate  = sample_rate
+        self.threshold    = threshold
         self.silero_model = None
         self._init_silero()
 
+    def _find_local_cache(self) -> str | None:
+        """Return the path to the cached Silero repo dir, or None."""
+        hub_base = os.path.expanduser("~/.cache/torch/hub")
+        for candidate in self._SILERO_CACHE_CANDIDATES:
+            path = os.path.join(hub_base, candidate)
+            if os.path.isdir(path):
+                return path
+        return None
+
     def _init_silero(self):
-        try:
-            # Try loading cached silero VAD locally from disk first (100% offline)
-            cached_dir = os.path.expanduser("~/.cache/torch/hub/snakers4_silero-vad_master")
-            if os.path.isdir(cached_dir):
+        if _OFFLINE_MODE:
+            # Strict offline — only attempt if cache is confirmed present.
+            cached_dir = self._find_local_cache()
+            if cached_dir is None:
+                print(
+                    "[VAD] OFFLINE_MODE: Silero cache not found. "
+                    "Using energy-based VAD. Run setup_offline_models.py while online."
+                )
+                return
+        else:
+            cached_dir = self._find_local_cache()
+
+        if cached_dir is not None:
+            try:
                 model, _ = torch.hub.load(
                     repo_or_dir=cached_dir,
-                    model='silero_vad',
-                    source='local',
-                    trust_repo=True
+                    model="silero_vad",
+                    source="local",
+                    trust_repo=True,
                 )
-            else:
-                model, _ = torch.hub.load(
-                    repo_or_dir='snakers4/silero-vad',
-                    model='silero_vad',
-                    force_reload=False,
-                    onnx=False,
-                    trust_repo=True
-                )
-            self.silero_model = model
-            print("[VAD] Silero VAD initialized successfully (offline mode).")
-        except Exception as e:
-            print(f"[VAD] Silero VAD initialization fallback ({e}). Using energy-based VAD.")
-            self.silero_model = None
+                self.silero_model = model
+                print("[VAD] ✅ Silero VAD initialized from local cache (offline).")
+                return
+            except Exception as e:
+                print(f"[VAD] Local Silero load failed ({e}). Using energy-based VAD.")
+                return
+
+        # No local cache and not in strict OFFLINE_MODE.
+        # Do NOT attempt remote fetch here — that belongs in setup_offline_models.py.
+        print(
+            "[VAD] Silero cache not found. Using energy-based VAD. "
+            "Run setup_offline_models.py while online to enable neural VAD."
+        )
 
     def is_speech(self, audio_chunk: np.ndarray) -> bool:
         """
@@ -53,15 +88,17 @@ class VoiceActivityDetector:
         if self.silero_model is not None:
             try:
                 tensor = torch.from_numpy(audio_float)
-                # Silero expects shape (1, N) or (N,)
                 if tensor.ndim == 1:
                     tensor = tensor.unsqueeze(0)
+                # Silero VAD requires input chunk length >= 512 samples at 16kHz (>= 31.25ms)
+                if tensor.shape[1] < 512:
+                    tensor = torch.nn.functional.pad(tensor, (0, 512 - tensor.shape[1]))
                 with torch.no_grad():
                     speech_prob = self.silero_model(tensor, self.sample_rate).item()
                 return speech_prob > self.threshold
             except Exception:
                 pass
 
-        # Fallback: RMS Energy detection
+        # Fallback: RMS Energy detection (lower threshold for normal speech)
         rms = np.sqrt(np.mean(audio_float ** 2))
-        return rms > 0.02
+        return rms > 0.008

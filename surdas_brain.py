@@ -10,6 +10,7 @@ os.environ["KMP_DUPLICATE_LIB_OK"] = "TRUE"
 os.environ["YOLO_VERBOSE"] = "False"
 os.environ["YOLO_OFFLINE"] = "True"
 os.environ["YOLO_SETTINGS_ANALYTICS"] = "False"
+os.environ["OFFLINE_MODE"] = "1"
 os.environ["HF_HUB_OFFLINE"] = "1"
 os.environ["TRANSFORMERS_OFFLINE"] = "1"
 os.environ["TORCH_HOME"] = os.path.expanduser("~/.cache/torch")
@@ -140,24 +141,45 @@ class SurdasBrain:
         t0_load = time.time()
 
         def _load_yolo():
-            yolo_path = os.path.join(SCRIPT_DIR, "yolov8n.pt")
+            # Prefer fine-tuned India model if present, fall back to stock yolov8n.pt
+            ft_path = os.path.join(SCRIPT_DIR, "models", "yolov8n_india_ft.pt")
+            stock_path = os.path.join(SCRIPT_DIR, "yolov8n.pt")
+            yolo_path = ft_path if os.path.isfile(ft_path) else stock_path
+            if os.path.isfile(ft_path):
+                print("[AI] Using fine-tuned YOLOv8n (yolov8n_india_ft.pt).")
             self.yolo = YOLO(yolo_path)
             print("[AI] ✅ YOLOv8 loaded.")
 
         def _load_midas():
+            # Prefer fine-tuned India model if present
+            ft_midas = os.path.join(SCRIPT_DIR, "models", "midas_small_india_ft.pt")
             midas_repo = os.path.expanduser("~/.cache/torch/hub/intel-isl_MiDaS_master")
-            if os.path.isdir(midas_repo):
-                self.midas = torch.hub.load(midas_repo, "MiDaS_small", source="local", pretrained=True).to(DEVICE).eval()
-                midas_transforms = torch.hub.load(midas_repo, "transforms", source="local")
-                self.transform = midas_transforms.small_transform
+
+            # Load transforms — always from local cache
+            if not os.path.isdir(midas_repo):
+                raise RuntimeError(
+                    "[AI] MiDaS local cache not found at ~/.cache/torch/hub/intel-isl_MiDaS_master. "
+                    "Run setup_offline_models.py while online first."
+                )
+            midas_transforms = torch.hub.load(midas_repo, "transforms", source="local")
+            self.transform = midas_transforms.small_transform
+
+            if os.path.isfile(ft_midas):
+                print("[AI] Using fine-tuned MiDaS_small (midas_small_india_ft.pt).")
+                base = torch.hub.load(midas_repo, "MiDaS_small", source="local", pretrained=False)
+                state = torch.load(ft_midas, map_location="cpu")
+                base.load_state_dict(state)
+                self.midas = base.to(DEVICE).eval()
             else:
-                self.midas = torch.hub.load("intel-isl/MiDaS", "MiDaS_small", trust_repo=True).to(DEVICE).eval()
-                self.transform = torch.hub.load("intel-isl/MiDaS", "transforms", trust_repo=True).small_transform
+                self.midas = torch.hub.load(
+                    midas_repo, "MiDaS_small", source="local", pretrained=True
+                ).to(DEVICE).eval()
             print("[AI] ✅ MiDaS Depth Estimator loaded.")
 
         def _load_ocr():
-            self.ocr = easyocr.Reader(['en'], gpu=(DEVICE == "cuda"), download_enabled=False)
-            print("[AI] ✅ EasyOCR loaded.")
+            self.ocr = easyocr.Reader(['en', 'hi'], gpu=(DEVICE == "cuda"), download_enabled=False)
+            print("[AI] ✅ EasyOCR loaded (en + hi).")
+
 
         def _load_voice():
             self.llm = LocalLLM(model_name=LLM_MODEL)
@@ -197,6 +219,14 @@ class SurdasBrain:
         self.latest_detected_objects = []
         self.latest_closest_obstacle = None
         self.wall_detected = False
+        
+        # Offline Navigation
+        from navigation import OfflineMapManager, Navigator, ManualLocation
+        self.map_manager = OfflineMapManager()
+        self.map_manager.auto_load()
+        self.navigator = Navigator(self.map_manager, self)
+        self.location_provider = ManualLocation(lat=17.3616, lon=78.4747)
+        self.navigator._current_location = self.location_provider.get_location()
 
         self.voice.speak("Ready. Navigation mode active. Say Hey Surdas.")
         
@@ -241,13 +271,16 @@ class SurdasBrain:
 
     def get_vision_context(self) -> dict:
         """Provides current live scene state for LLM and Command Router."""
-        return {
+        ctx = {
             "mode": self.mode,
             "torch_on": self.led_on,
             "detected_objects": list(self.latest_detected_objects),
             "closest_obstacle": self.latest_closest_obstacle,
             "wall_ahead": self.wall_detected
         }
+        if hasattr(self, "navigator") and self.navigator:
+            ctx["navigation"] = self.navigator.get_status()
+        return ctx
 
     def get_status_summary(self) -> str:
         """Returns verbal status report."""
@@ -256,6 +289,14 @@ class SurdasBrain:
         obj_count = len(self.latest_detected_objects)
         wall_stat = "Wall detected ahead." if self.wall_detected else "No wall."
         return f"System status: Camera is {stream_stat}. Flashlight is {torch_stat}. Mode is {self.mode}. Detecting {obj_count} objects. {wall_stat}"
+
+    def is_voice_active(self) -> bool:
+        """Returns True if a voice command is being received, processed, or spoken."""
+        if self.voice_assistant is not None and getattr(self.voice_assistant, "is_active", False):
+            return True
+        if self.voice.is_speaking or not self.voice._queue.empty():
+            return True
+        return False
 
     def toggle_esp32_led(self, state: bool):
         """Toggles the ESP32-CAM flash torch."""
@@ -288,7 +329,36 @@ class SurdasBrain:
         """
         Processes both Discrete Objects (YOLO) and Dense Continuous Barriers/Walls (MiDaS).
         """
+        if hasattr(self, "navigator") and self.navigator:
+            try:
+                self.navigator.update_location(self.location_provider.get_location())
+            except Exception:
+                pass
+
         h, w, _ = frame.shape
+        third_w = w // 3
+
+        # -------------------------------------------------------------
+        # STOP YOLO & MIDAS INFERENCE WHILE VOICE COMMAND IS ACTIVE
+        # -------------------------------------------------------------
+        if self.is_voice_active():
+            if getattr(self, "_last_depth_colormap", None) is not None:
+                depth_colormap = self._last_depth_colormap.copy()
+            else:
+                depth_colormap = np.zeros_like(frame)
+
+            # Visual overlay indicating vision paused for voice priority
+            cv2.rectangle(frame, (10, 10), (w - 10, 52), (0, 0, 180), -1)
+            cv2.putText(frame, "🎤 VOICE COMMAND ACTIVE - YOLO & MIDAS PAUSED", (20, 38),
+                        cv2.FONT_HERSHEY_SIMPLEX, 0.55, (255, 255, 255), 2)
+
+            cv2.rectangle(depth_colormap, (third_w, 10), (2 * third_w, 52), (0, 0, 180), -1)
+            cv2.putText(depth_colormap, "VISION PAUSED", (third_w + 15, 38),
+                        cv2.FONT_HERSHEY_SIMPLEX, 0.55, (255, 255, 255), 2)
+
+            time.sleep(0.03)  # Yield CPU/GPU cycles to STT & LLM
+            return frame, depth_colormap, len(self.latest_detected_objects)
+
         raw_depth, depth_vis = self.compute_depth(frame)
         
         # -------------------------------------------------------------
@@ -353,14 +423,17 @@ class SurdasBrain:
             else:
                 proximity = "distance"
 
+            # Convert MiDaS relative depth to approximate distance in meters
+            dist_m = round(1000.0 / max(med_depth, 1.0), 1)
+
             if proximity == "very close" and pos == "ahead":
                 immediate_danger = f"Caution! {label} directly ahead."
 
-            detected_obstacles.append((label, pos, proximity, med_depth, conf))
+            detected_obstacles.append((label, pos, proximity, med_depth, conf, dist_m))
 
             # Draw standard YOLO Bounding Box
             cv2.rectangle(frame, (x1, y1), (x2, y2), color, 2)
-            tag = f"{label} {int(conf*100)}% | {proximity}"
+            tag = f"{label} {int(conf*100)}% | {dist_m}m"
             
             (tw, th), _ = cv2.getTextSize(tag, cv2.FONT_HERSHEY_SIMPLEX, 0.45, 1)
             cv2.rectangle(frame, (x1, max(0, y1 - 20)), (x1 + tw + 6, max(0, y1)), color, -1)
@@ -392,10 +465,15 @@ class SurdasBrain:
         # -------------------------------------------------------------
         now = time.time()
 
-        # Skip low-priority nav chatter while voice assistant is processing/speaking
+        # Skip low-priority nav chatter while voice assistant is processing/speaking or user is speaking
         assistant_busy = (
             self.voice_assistant is not None
-            and (self.voice_assistant._processing or not self.voice._queue.empty())
+            and (
+                self.voice_assistant._processing
+                or getattr(self.voice_assistant, "is_recording", False)
+                or not self.voice._queue.empty()
+                or self.voice.is_speaking
+            )
         )
 
         # Priority 1: Immediate Collision Hazard (always fires, interrupts everything)
@@ -411,8 +489,8 @@ class SurdasBrain:
         elif not assistant_busy and now - self.last_speech_time > 4.0:
             if detected_obstacles:
                 detected_obstacles.sort(key=lambda x: x[3], reverse=True)
-                top_lbl, top_pos, top_prox, _, _ = detected_obstacles[0]
-                speech_text = f"{top_lbl} {top_pos}."
+                top_lbl, top_pos, top_prox, _, _, top_dist = detected_obstacles[0]
+                speech_text = f"{top_lbl} {top_pos}, about {top_dist} meters away."
                 self.latest_closest_obstacle = speech_text
 
                 if speech_text != self.last_spoken or now - self.last_speech_time > 8.0:
@@ -444,6 +522,7 @@ class SurdasBrain:
         # Broadcast for Caregiver Dashboard
         broadcast_event("vision", self.get_vision_context())
 
+        self._last_depth_colormap = depth_colormap.copy()
         return frame, depth_colormap, len(detected_obstacles)
 
     def process_ocr(self, frame):

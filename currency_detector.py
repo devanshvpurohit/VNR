@@ -74,32 +74,50 @@ class SmoothIndianCurrencyDetector:
         return None
 
     def read_ocr_denomination(self, crop):
-        """Reads numerical denomination printed on the note."""
+        """Reads numerical denomination printed on the note (English + Hindi)."""
         rgb = cv2.cvtColor(crop, cv2.COLOR_BGR2RGB)
         texts = self.ocr.readtext(rgb, detail=0)
-        
-        combined_text = " ".join(texts).upper()
-        
-        # Check explicit numerals
-        matches = re.findall(r'\b(500|200|100|50|20|10)\b', combined_text)
+
+        # Join all OCR text — keep two copies: uppercased for English, raw for Hindi
+        combined_upper = " ".join(texts).upper()
+        combined_raw   = " ".join(texts)   # Devanagari has no case concept
+
+        # ── 1. Explicit numerals (most reliable) ──────────────────────────────
+        matches = re.findall(r'\b(500|200|100|50|20|10)\b', combined_upper)
         if matches:
             return matches[0]
-            
-        # Check Hindi / English words if numeral wasn't clean
-        if "FIVE HUNDRED" in combined_text or "5OO" in combined_text:
+
+        # ── 2. English denomination words ──────────────────────────────────────
+        if "FIVE HUNDRED" in combined_upper or "5OO" in combined_upper:
             return "500"
-        elif "TWO HUNDRED" in combined_text or "2OO" in combined_text:
+        elif "TWO HUNDRED" in combined_upper or "2OO" in combined_upper:
             return "200"
-        elif "ONE HUNDRED" in combined_text or "1OO" in combined_text:
+        elif "ONE HUNDRED" in combined_upper or "1OO" in combined_upper:
             return "100"
-        elif "FIFTY" in combined_text:
+        elif "FIFTY" in combined_upper:
             return "50"
-        elif "TWENTY" in combined_text:
+        elif "TWENTY" in combined_upper:
             return "20"
-        elif "TEN" in combined_text:
+        elif "TEN" in combined_upper:
+            return "10"
+
+        # ── 3. Hindi denomination words (raw text — no uppercasing) ───────────
+        # Indian banknotes print denominations in both Hindi and English.
+        if "पाँच सौ" in combined_raw or "पांच सौ" in combined_raw:
+            return "500"
+        elif "दो सौ" in combined_raw:
+            return "200"
+        elif "एक सौ" in combined_raw:
+            return "100"
+        elif "पचास" in combined_raw:
+            return "50"
+        elif "बीस" in combined_raw:
+            return "20"
+        elif "दस" in combined_raw:
             return "10"
 
         return None
+
 
     def detect(self, frame):
         """

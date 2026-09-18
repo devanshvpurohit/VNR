@@ -90,6 +90,38 @@ Status: "Hey Surdas, status"
 (The local LLM is automatically provided with the live vision context: detected objects, proximity, and torch status to answer accurately.)
 ---
 
+## OFFLINE NAVIGATION
+
+SURDAS now includes a fully offline pedestrian navigation system built using OpenStreetMap data. No internet connection or live API routing is required during use.
+
+**Important**: Map data must be downloaded while online before going offline.
+
+1. Install dependencies:
+```bash
+pip install osmnx networkx shapely
+```
+
+2. Connect to the internet once and download a city map:
+```bash
+python setup_offline_maps.py --place "Hyderabad, Telangana, India"
+```
+
+3. Verify offline readiness:
+```bash
+python -m navigation.offline_test
+```
+
+4. Disable networking. Start SURDAS. Say:
+> "Hey SURDAS, navigate to Charminar."
+> "सुरदास, चारमीनार तक ले चलो।"
+
+- Routing uses the locally stored graph (no Google Maps).
+- Different cities/regions require their own offline map package.
+- The map data can become outdated and should periodically be refreshed while online.
+- No live internet routing is used during offline operation.
+- **Safety Note**: GPS does not provide exact positioning. SURDAS may say "Crossing ahead", but ALWAYS check traffic manually before crossing.
+---
+
 ## How to Run
 
 1. (Optional) Start Ollama (for conversational AI):
