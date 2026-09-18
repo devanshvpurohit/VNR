@@ -12,6 +12,57 @@ SURDAS is an AI-assisted perception and voice assistant for low-cost visually-im
 
 ---
 
+## 🖥️ User Interfaces
+
+SURDAS offers two modern interfaces for different use cases:
+
+### 1. PyQt5 Desktop GUI (New!)
+**Modern native desktop application with real-time monitoring**
+
+```bash
+./launch_gui.sh
+# or
+python3 surdas_gui.py
+```
+
+**Features**:
+- 🎨 Modern gradient-based UI with three-column layout
+- 📹 Live camera feed display (20 FPS)
+- 🎛️ System controls (Start/Stop, Mode selection, Flashlight)
+- 🧭 Indoor navigation monitoring (state, confidence, destination)
+- 📊 Real-time statistics (FPS, object count, uptime)
+- 🧠 Spatial memory display (rooms & landmarks)
+- 📜 Color-coded activity logs with timestamps
+- 🖱️ Native desktop experience with Qt5
+
+**Requirements**: `PyQt5>=5.15.0` (auto-installed by launcher)
+
+### 2. Web-Based Caregiver Dashboard
+**React + TypeScript dashboard for remote monitoring**
+
+```bash
+# Terminal 1: Start SURDAS backend
+python3 surdas_brain.py
+
+# Terminal 2: Start dashboard
+cd caregiver_dashboard
+npm install
+npm run dev
+```
+
+**Features**:
+- 🌐 Web-based interface accessible from any device
+- 📱 Responsive design (desktop, tablet, mobile)
+- 🔄 WebSocket real-time updates
+- 🗺️ Interactive OpenStreetMap integration
+- 📊 Event timeline with filtering
+- 💬 Speech command history
+- 🎨 Modern Tailwind CSS design
+
+**Recommended for**: Caregivers monitoring from another room/device
+
+---
+
 ##  System Architecture
 ```
 SURDAS
