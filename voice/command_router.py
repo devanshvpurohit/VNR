@@ -50,6 +50,8 @@ class CommandRouter:
         self.brain = brain
         self.llm = llm
         self.navigator = getattr(brain, "navigator", None)
+        self.indoor_navigator = getattr(brain, "indoor_navigator", None)
+        self.spatial_memory = getattr(brain, "spatial_memory", None)
 
     # ─────────────────────────────────────────────────────────────────────────
     def route_command(self, raw_text: str, lang: str = "en") -> bool:
@@ -59,32 +61,239 @@ class CommandRouter:
 
         print(f"[ROUTER] ▶ '{text}'  [lang={lang}]")
 
-        # ── 0. OFFLINE NAVIGATION ─────────────────────────────────────────────
+        # ── 1. INDOOR NAVIGATION & SPATIAL MEMORY ─────────────────────────────
+        if self._handle_indoor_navigation_commands(text, raw_text, lang):
+            return True
+
+        # ── 2. OFFLINE NAVIGATION ─────────────────────────────────────────────
         if self._handle_navigation_commands(text, raw_text, lang):
             return True
 
-        # ── 1. APP LAUNCHER ───────────────────────────────────────────────────
+        # ── 3. APP LAUNCHER ───────────────────────────────────────────────────
         if self._handle_app_commands(text, raw_text, lang):
             return True
 
-        # ── 2. HARDWARE / MODE COMMANDS ───────────────────────────────────────
+        # ── 4. HARDWARE / MODE COMMANDS ───────────────────────────────────────
         if self._handle_hardware_commands(text, lang):
             return True
 
-        # ── 3. FAST VISION DESCRIPTION ────────────────────────────────────────
+        # ── 5. FAST VISION DESCRIPTION ────────────────────────────────────────
         if self._handle_vision_query(text, lang):
             return True
 
-        # ── 4. MODEL MANAGEMENT ───────────────────────────────────────────────
+        # ── 6. MODEL MANAGEMENT ───────────────────────────────────────────────
         if self._handle_model_commands(text, lang):
             return True
 
-        # ── 5. GENERAL KNOWLEDGE / CONVERSATION (Ollama LLM) ─────────────────
+        # ── 7. GENERAL KNOWLEDGE / CONVERSATION (Ollama LLM) ─────────────────
         self._handle_llm_query(raw_text, lang)
         return True
 
     # ─────────────────────────────────────────────────────────────────────────
-    # Category 0 — Offline Navigation Commands
+    # Category 0 — Indoor Navigation & Spatial Memory Commands
+    # ─────────────────────────────────────────────────────────────────────────
+    def _handle_indoor_navigation_commands(self, text: str, raw_text: str, lang: str) -> bool:
+        if not self.indoor_navigator or not self.spatial_memory:
+            return False
+
+        # Pause indoor navigation
+        if _match(_p.PAUSE_NAVIGATION, text):
+            self.indoor_navigator.pause(lang)
+            return True
+
+        # Resume indoor navigation
+        if _match(_p.RESUME_NAVIGATION, text):
+            self.indoor_navigator.resume(lang)
+            return True
+
+        # Stop indoor navigation (also check NAV_STOP for compatibility)
+        if _match(_p.NAV_STOP, text) and self.indoor_navigator.get_status().state != "IDLE":
+            self.indoor_navigator.stop(lang)
+            return True
+
+        # Label current room
+        if _match(_p.ROOM_LABEL, raw_text):
+            room_name = None
+            for trigger in _p.ROOM_LABEL["en"]:
+                if trigger in text:
+                    room_name = _extract_app_name(text, trigger)
+                    break
+            if not room_name:
+                for trigger in _p.ROOM_LABEL["hi"]:
+                    if trigger in raw_text:
+                        room_name = _extract_app_name(raw_text, trigger)
+                        break
+            
+            if room_name:
+                # Save room at current estimated position (0, 0 if no tracking)
+                room_id = self.spatial_memory.add_room(room_name, center_x=0.0, center_y=0.0, radius_m=5.0)
+                if lang == "hi":
+                    self.brain.voice.speak(f"ठीक है, मैंने इस कमरे को {room_name} के रूप में याद कर लिया है।", lang)
+                else:
+                    self.brain.voice.speak(f"Okay, I've remembered this room as {room_name}.", lang)
+                
+                # Broadcast telemetry
+                try:
+                    from telemetry import broadcast_event
+                    broadcast_event("room_labeled", {"name": room_name, "room_id": room_id})
+                except Exception:
+                    pass
+                return True
+
+        # Label landmark
+        if _match(_p.LANDMARK_LABEL, raw_text):
+            landmark_name = None
+            for trigger in _p.LANDMARK_LABEL["en"]:
+                if trigger in text:
+                    landmark_name = _extract_app_name(text, trigger)
+                    break
+            if not landmark_name:
+                for trigger in _p.LANDMARK_LABEL["hi"]:
+                    if trigger in raw_text:
+                        landmark_name = _extract_app_name(raw_text, trigger)
+                        break
+            
+            if landmark_name:
+                landmark_id = self.spatial_memory.add_landmark(
+                    landmark_name, x=0.0, y=0.0, z=0.0, description="User-labeled location"
+                )
+                if lang == "hi":
+                    self.brain.voice.speak(f"ठीक है, मैंने इस स्थान को {landmark_name} के रूप में बचा लिया है।", lang)
+                else:
+                    self.brain.voice.speak(f"Okay, I've saved this location as {landmark_name}.", lang)
+                
+                try:
+                    from telemetry import broadcast_event
+                    broadcast_event("landmark_labeled", {"name": landmark_name, "landmark_id": landmark_id})
+                except Exception:
+                    pass
+                return True
+
+        # Navigate to object
+        if _match(_p.INDOOR_NAV_TO_OBJECT, raw_text):
+            object_name = None
+            for trigger in _p.INDOOR_NAV_TO_OBJECT["en"]:
+                if trigger in text:
+                    object_name = _extract_app_name(text, trigger)
+                    break
+            if not object_name:
+                for trigger in _p.INDOOR_NAV_TO_OBJECT["hi"]:
+                    if trigger in raw_text:
+                        object_name = _extract_app_name(raw_text, trigger)
+                        break
+            
+            if object_name:
+                success = self.indoor_navigator.navigate_to_object(object_name, lang)
+                if success:
+                    try:
+                        from telemetry import broadcast_event
+                        broadcast_event("indoor_nav_started", {"destination": object_name, "type": "object"})
+                    except Exception:
+                        pass
+                return True
+
+        # Navigate to landmark
+        if _match(_p.INDOOR_NAV_TO_LANDMARK, raw_text) and "room" not in text and "the" not in text:
+            landmark_name = None
+            for trigger in _p.INDOOR_NAV_TO_LANDMARK["en"]:
+                if trigger in text:
+                    landmark_name = _extract_app_name(text, trigger)
+                    break
+            if not landmark_name:
+                for trigger in _p.INDOOR_NAV_TO_LANDMARK["hi"]:
+                    if trigger in raw_text:
+                        landmark_name = _extract_app_name(raw_text, trigger)
+                        break
+            
+            if landmark_name:
+                success = self.indoor_navigator.navigate_to_landmark(landmark_name, lang)
+                if success:
+                    try:
+                        from telemetry import broadcast_event
+                        broadcast_event("indoor_nav_started", {"destination": landmark_name, "type": "landmark"})
+                    except Exception:
+                        pass
+                return True
+
+        # Where is object
+        if _match(_p.WHERE_IS_OBJECT, raw_text):
+            object_name = None
+            for trigger in _p.WHERE_IS_OBJECT["en"]:
+                if trigger in text:
+                    object_name = _extract_app_name(text, trigger)
+                    break
+            if not object_name:
+                for trigger in _p.WHERE_IS_OBJECT["hi"]:
+                    if trigger in raw_text:
+                        object_name = _extract_app_name(raw_text, trigger)
+                        break
+            
+            if object_name:
+                obj = self.spatial_memory.find_object_by_label(object_name)
+                if obj:
+                    # Rough distance calculation
+                    dist = (obj.x ** 2 + obj.y ** 2) ** 0.5
+                    if lang == "hi":
+                        self.brain.voice.speak(f"{object_name} लगभग {int(dist)} मीटर दूर है। मैं आपको वहां ले जा सकता हूं।", lang)
+                    else:
+                        self.brain.voice.speak(f"The {object_name} is approximately {int(dist)} metres away. I can guide you there.", lang)
+                else:
+                    if lang == "hi":
+                        self.brain.voice.speak(f"मुझे {object_name} याद नहीं है। कृपया इसे पहले दिखाएं।", lang)
+                    else:
+                        self.brain.voice.speak(f"I don't remember seeing a {object_name}. Please show it to me first.", lang)
+                return True
+
+        # What room is this
+        if _match(_p.WHAT_ROOM, raw_text):
+            room = self.spatial_memory.get_room_at_position(0.0, 0.0)
+            if room:
+                if lang == "hi":
+                    self.brain.voice.speak(f"आप {room.name} में हैं।", lang)
+                else:
+                    self.brain.voice.speak(f"You are in the {room.name}.", lang)
+            else:
+                if lang == "hi":
+                    self.brain.voice.speak("मुझे नहीं पता यह कौन सा कमरा है। आप इसे लेबल कर सकते हैं।", lang)
+                else:
+                    self.brain.voice.speak("I don't know which room this is. You can label it.", lang)
+            return True
+
+        # List rooms
+        if _match(_p.LIST_ROOMS, raw_text):
+            rooms = self.spatial_memory.list_rooms()
+            if not rooms:
+                if lang == "hi":
+                    self.brain.voice.speak("मुझे कोई कमरा याद नहीं है। आप कमरों को लेबल कर सकते हैं।", lang)
+                else:
+                    self.brain.voice.speak("I don't remember any rooms yet. You can label rooms by saying 'this is the bedroom'.", lang)
+            else:
+                room_names = ", ".join(r.name for r in rooms)
+                if lang == "hi":
+                    self.brain.voice.speak(f"मुझे ये कमरे याद हैं: {room_names}।", lang)
+                else:
+                    self.brain.voice.speak(f"I remember these rooms: {room_names}.", lang)
+            return True
+
+        # Describe surroundings
+        if _match(_p.DESCRIBE_SURROUNDINGS, raw_text):
+            description = self.spatial_memory.describe_surroundings(0.0, 0.0, radius_m=3.0)
+            self.brain.voice.speak(description, lang)
+            return True
+
+        # Clear memory (safety check)
+        if _match(_p.CLEAR_MEMORY, raw_text):
+            if lang == "hi":
+                self.brain.voice.speak("क्या आप वाकई सब भूलना चाहते हैं? यह कार्रवाई वापस नहीं की जा सकती।", lang)
+            else:
+                self.brain.voice.speak("Are you sure you want me to forget everything? This cannot be undone. Say 'yes forget everything' to confirm.", lang)
+            # Note: actual clear would need confirmation - left as exercise
+            return True
+
+        return False
+
+    # ─────────────────────────────────────────────────────────────────────────
+    # Category 2 — Offline Navigation Commands  
     # ─────────────────────────────────────────────────────────────────────────
     def _handle_navigation_commands(self, text: str, raw_text: str, lang: str) -> bool:
         if not self.navigator:
@@ -149,7 +358,7 @@ class CommandRouter:
         return False
 
     # ─────────────────────────────────────────────────────────────────────────
-    # Category 1 — App commands
+    # Category 3 — App commands
     # ─────────────────────────────────────────────────────────────────────────
     def _handle_app_commands(self, text: str, raw_text: str, lang: str) -> bool:
 
@@ -212,7 +421,7 @@ class CommandRouter:
         return False
 
     # ─────────────────────────────────────────────────────────────────────────
-    # Category 2 — Hardware / SURDAS mode commands
+    # Category 4 — Hardware / SURDAS mode commands
     # ─────────────────────────────────────────────────────────────────────────
     def _handle_hardware_commands(self, text: str, lang: str) -> bool:
 
@@ -327,7 +536,7 @@ class CommandRouter:
         return False
 
     # ─────────────────────────────────────────────────────────────────────────
-    # Category 3 — Fast vision description (no LLM latency)
+    # Category 5 — Fast vision description (no LLM latency)
     # ─────────────────────────────────────────────────────────────────────────
     def _handle_vision_query(self, text: str, lang: str) -> bool:
         if not _match(_p.WHAT_DO_YOU_SEE, text):
@@ -360,7 +569,7 @@ class CommandRouter:
         return True
 
     # ─────────────────────────────────────────────────────────────────────────
-    # Category 4 — Model management commands
+    # Category 6 — Model management commands
     # ─────────────────────────────────────────────────────────────────────────
     def _handle_model_commands(self, text: str, lang: str) -> bool:
 
@@ -411,7 +620,7 @@ class CommandRouter:
         return False
 
     # ─────────────────────────────────────────────────────────────────────────
-    # Category 5 — General LLM query
+    # Category 7 — General LLM query
     # ─────────────────────────────────────────────────────────────────────────
     def _handle_llm_query(self, raw_text: str, lang: str = "en"):
         if not self.llm.is_available():

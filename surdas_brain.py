@@ -224,6 +224,23 @@ class SurdasBrain:
         self.map_manager.auto_load()
         self.navigator = Navigator(self.map_manager, self)
         
+        # Indoor Navigation & Spatial Memory
+        from spatial_memory import SpatialMemory
+        from indoor_navigator import IndoorNavigator
+        from indoor_perception import IndoorPerception
+        
+        print("[SYSTEM] Initializing indoor navigation and spatial memory...")
+        self.spatial_memory = SpatialMemory()
+        self.indoor_navigator = IndoorNavigator(self.spatial_memory, self.voice)
+        self.indoor_perception = IndoorPerception(grid_size=32)
+        
+        # Get memory stats
+        stats = self.spatial_memory.get_stats()
+        print(f"[SPATIAL_MEMORY] Loaded: {stats['rooms']} rooms, {stats['objects']} objects, {stats['landmarks']} landmarks")
+        
+        # State for indoor navigation
+        self.indoor_nav_mode = False  # Toggle for indoor navigation processing
+        
         # Initialize location provider based on configuration
         gps_enabled = GPS_ENABLED  # Use local variable to avoid shadowing
         if gps_enabled:
@@ -360,6 +377,7 @@ class SurdasBrain:
     def process_navigation(self, frame):
         """
         Processes both Discrete Objects (YOLO) and Dense Continuous Barriers/Walls (MiDaS).
+        NOW ALSO: Indoor navigation perception and guidance.
         
         SAFETY CRITICAL: Vision processing continues ALWAYS, even during voice activity.
         Only non-critical voice announcements are suppressed during voice commands.
@@ -409,6 +427,9 @@ class SurdasBrain:
         detected_obstacles = []
         current_objects_in_view = []
         center_object_found = False
+        
+        # Prepare YOLO detections for indoor perception
+        yolo_detections = []
 
         for box in results.boxes:
             cls_id = int(box.cls[0])
@@ -418,6 +439,13 @@ class SurdasBrain:
 
             x1, y1, x2, y2 = map(int, box.xyxy[0].tolist())
             cx = (x1 + x2) / 2
+            
+            # Prepare for indoor perception
+            yolo_detections.append({
+                "class": label,
+                "confidence": conf,
+                "bbox": [x1, y1, x2, y2]
+            })
             
             # Spatial position
             if cx < third_w:
@@ -463,6 +491,44 @@ class SurdasBrain:
             cv2.rectangle(frame, (x1, max(0, y1 - 20)), (x1 + tw + 6, max(0, y1)), color, -1)
             cv2.putText(frame, tag, (x1 + 3, max(14, y1 - 5)),
                         cv2.FONT_HERSHEY_SIMPLEX, 0.45, (0, 0, 0), 1, cv2.LINE_AA)
+
+        # -------------------------------------------------------------
+        # 2.5 INDOOR NAVIGATION PERCEPTION & GUIDANCE
+        # -------------------------------------------------------------
+        indoor_perception_result = None
+        if hasattr(self, "indoor_perception") and hasattr(self, "indoor_navigator"):
+            try:
+                # Process frame for indoor navigation
+                indoor_perception_result = self.indoor_perception.process_frame(
+                    yolo_detections=yolo_detections,
+                    depth_map=raw_depth,
+                    img_width=w,
+                    img_height=h
+                )
+                
+                # Update indoor navigator with perception
+                self.indoor_navigator.update(indoor_perception_result)
+                
+                # Check navigation status
+                nav_status = self.indoor_navigator.get_status()
+                
+                # Broadcast indoor navigation telemetry
+                if nav_status.state != "IDLE":
+                    try:
+                        broadcast_event("indoor_navigation", {
+                            "state": nav_status.state.value,
+                            "destination": nav_status.destination,
+                            "confidence": nav_status.confidence.value,
+                            "distance_remaining": nav_status.distance_remaining,
+                            "safe_directions": nav_status.safe_directions_count,
+                            "hold_reason": nav_status.hold_reason.value if nav_status.hold_reason else None
+                        })
+                    except Exception:
+                        pass
+                
+            except Exception as e:
+                # Indoor perception failure should not crash main loop
+                print(f"[INDOOR_PERCEPTION] Error: {e}")
 
         # -------------------------------------------------------------
         # 3. WALL / CONTINUOUS SURFACE DETECTION (MIDAS)
@@ -513,8 +579,15 @@ class SurdasBrain:
 
         # Priority 2: Routine navigation announcements
         # These are suppressed during voice commands to avoid interrupting user interaction
+        # AND during indoor navigation mode (indoor navigator handles its own guidance)
         elif not assistant_busy and now - self.last_speech_time > ROUTINE_ANNOUNCEMENT_COOLDOWN:
-            if detected_obstacles:
+            # Check if indoor navigator is active
+            indoor_nav_active = (
+                hasattr(self, "indoor_navigator") 
+                and self.indoor_navigator.get_status().state not in ["IDLE"]
+            )
+            
+            if not indoor_nav_active and detected_obstacles:
                 detected_obstacles.sort(key=lambda x: x[3], reverse=True)
                 top_lbl, top_pos, top_prox, _, _, top_prox_desc = detected_obstacles[0]
                 speech_text = f"{top_lbl} {top_pos}, {top_prox_desc}."
@@ -524,7 +597,7 @@ class SurdasBrain:
                     self.voice.speak(speech_text)
                     self.last_spoken = speech_text
                     self.last_speech_time = now
-            else:
+            elif not indoor_nav_active:
                 self.latest_closest_obstacle = None
                 if self.last_spoken != "clear":
                     self.voice.speak("Path is clear.")
@@ -545,6 +618,28 @@ class SurdasBrain:
             cv2.rectangle(depth_colormap, (third_w + 10, 10), (2 * third_w - 10, 50), (0, 0, 255), -1)
             cv2.putText(depth_colormap, "WALL AHEAD", (third_w + 20, 38),
                         cv2.FONT_HERSHEY_SIMPLEX, 0.6, (255, 255, 255), 2)
+        
+        # Draw indoor navigation status overlay
+        if indoor_perception_result and hasattr(self, "indoor_navigator"):
+            nav_status = self.indoor_navigator.get_status()
+            if nav_status.state != "IDLE":
+                # Draw navigation confidence indicator
+                conf_color = {
+                    "HIGH": (0, 255, 0),
+                    "MEDIUM": (0, 200, 255),
+                    "LOW": (0, 100, 255),
+                    "INVALID": (0, 0, 255)
+                }.get(indoor_perception_result.nav_confidence.value, (100, 100, 100))
+                
+                cv2.rectangle(depth_colormap, (10, 10), (220, 80), conf_color, 2)
+                cv2.putText(depth_colormap, f"NAV: {nav_status.state.value}", (20, 30),
+                            cv2.FONT_HERSHEY_SIMPLEX, 0.5, (255, 255, 255), 1)
+                cv2.putText(depth_colormap, f"Conf: {indoor_perception_result.nav_confidence.value}", (20, 50),
+                            cv2.FONT_HERSHEY_SIMPLEX, 0.5, (255, 255, 255), 1)
+                if nav_status.destination:
+                    dest_text = nav_status.destination[:15]  # Truncate long names
+                    cv2.putText(depth_colormap, f"→ {dest_text}", (20, 70),
+                                cv2.FONT_HERSHEY_SIMPLEX, 0.5, (255, 255, 255), 1)
         
         # Visual indicator when voice command is active (but vision continues)
         if self.is_voice_active():

@@ -90,32 +90,76 @@ class WakeWordDetector:
         Checks if transcribed text (English or Hindi) contains any wake word.
         Returns (is_wake_word_present, remaining_command).
 
+        Supports two modes:
+        1. Same-utterance: "Surdas, navigate to door" → command extracted
+        2. Traditional wake: "Hey Surdas" → activates, waits for next utterance
+
         Works on both Latin and Devanagari scripts via i18n_phrases.match().
         """
         if not text or not text.strip():
             return False, ""
 
-        # Check bilingual wake word set
+        text_stripped = text.strip()
+        text_lower = text_stripped.lower()
+
+        # Priority 1: Check for same-utterance wake words at the START of phrase
+        # This enables: "Surdas, what do you see?" in a single utterance
+        same_utterance_wakes = [
+            "surdas", "सुरदास", "सूरदास", "soordas", "sura das"
+        ]
+        
+        for wake in same_utterance_wakes:
+            # Check if text starts with wake word (case-insensitive for English)
+            if wake in ["surdas", "soordas", "sura das"]:
+                if text_lower.startswith(wake):
+                    # Extract command after wake word
+                    remaining = text_stripped[len(wake):].strip(" ,.?!")
+                    if remaining:
+                        # Found command in same utterance
+                        print(f"[WAKEWORD] Same-utterance wake: '{wake}' → command: '{remaining}'")
+                        return True, remaining
+            else:
+                # Hindi wake word - case-sensitive
+                if text_stripped.startswith(wake):
+                    remaining = text_stripped[len(wake):].strip(" ,.?!।")
+                    if remaining:
+                        print(f"[WAKEWORD] Same-utterance wake: '{wake}' → command: '{remaining}'")
+                        return True, remaining
+
+        # Priority 2: Check for traditional wake phrases (with "Hey", etc.)
         if _i18n_match(WAKE_WORDS, text):
             # Strip the matched wake phrase from the rest of the text.
-            cleaned_lower = text.strip().lower()
-            remaining = text.strip()
+            remaining = text_stripped
 
             # Try to find and remove the matched English phrase
             for phrase in WAKE_WORDS["en"]:
-                if phrase in cleaned_lower:
-                    idx = cleaned_lower.find(phrase)
-                    remaining = text.strip()[idx + len(phrase):].strip(" ,.?!")
-                    return True, remaining
+                if phrase in text_lower:
+                    idx = text_lower.find(phrase)
+                    remaining = text_stripped[idx + len(phrase):].strip(" ,.?!")
+                    
+                    # If there's a command after "Hey Surdas", treat as same-utterance
+                    if remaining:
+                        print(f"[WAKEWORD] Traditional wake with command: '{phrase}' → '{remaining}'")
+                        return True, remaining
+                    else:
+                        # Just wake word, no command (traditional activation)
+                        print(f"[WAKEWORD] Traditional wake-only: '{phrase}'")
+                        return True, ""
 
             # Try to find and remove the matched Hindi phrase
             for phrase in WAKE_WORDS["hi"]:
                 if phrase in text:
                     idx = text.find(phrase)
-                    remaining = text[idx + len(phrase):].strip(" ,.?!।")
-                    return True, remaining
+                    remaining = text_stripped[idx + len(phrase):].strip(" ,.?!।")
+                    
+                    if remaining:
+                        print(f"[WAKEWORD] Traditional wake with command: '{phrase}' → '{remaining}'")
+                        return True, remaining
+                    else:
+                        print(f"[WAKEWORD] Traditional wake-only: '{phrase}'")
+                        return True, ""
 
-            # Match found but couldn't strip — return full text as command
-            return True, text.strip()
+            # Match found but couldn't strip — return as wake-only
+            return True, ""
 
-        return False, text.strip()
+        return False, text_stripped

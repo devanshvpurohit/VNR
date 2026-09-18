@@ -1,77 +1,88 @@
-# SURDAS - Real-Time Assistive Vision and Local Voice Assistant
+# SURDAS - Real-Time Assistive Vision and Local Voice Assistant with Indoor Navigation
 
 SURDAS is an AI-assisted perception and voice assistant for low-cost visually-impaired use-cases. It combines real-time computer vision (YOLOv8 object detection, MiDaS relative depth estimation, Indian banknote recognition, and EasyOCR text reading) with a fully offline/self-hosted voice assistant system (Silero VAD, Wake Word Detection, Whisper STT, Command Router, Local LLM via Ollama, and TTS).
 
+**NEW: Indoor Navigation & Spatial Memory** — SURDAS now supports blindfold navigation in indoor environments with spatial memory for room/object labeling, deterministic safety-first navigation, and same-utterance wake-word detection ("Surdas, guide me to the door").
+
 **⚠️ IMPORTANT LIMITATIONS:**
 - **MiDaS provides RELATIVE depth/proximity estimation, NOT metric distance.** Announcements like "nearby" or "very close" are based on relative depth values, not calibrated measurements in meters.
-- **Real-world navigation requires GPS hardware.** Without GPS, navigation uses manual test coordinates only.
+- **Indoor navigation is approximate without IMU/odometry.** Position tracking relies on perception and memory, not precise measurements.
+- **Real-world outdoor navigation requires GPS hardware.** Without GPS, navigation uses manual test coordinates only.
 - **Safety features are assistive tools, not collision avoidance systems.** Always exercise caution and manual awareness.
 
 ---
 
 ##  System Architecture
 ```
-
 SURDAS
 |
 +--------------+--------------+
-|               |
-v               v
-Vision System         Voice System
-|               |
-ESP32-CAM             Microphone
-|               |
-OpenCV / YOLO           VAD (Silero)
-|               |
-Depth (MiDaS) / OCR       Speech-to-Text
-|            (faster-whisper)
-Object Detection          |
-|               |
-+-------------+---------------+
+|               |               |
+v               v               v
+Vision System   Voice System    Spatial Memory
+|               |               |
+ESP32-CAM       Microphone      SQLite DB
+|               |               |
+OpenCV/YOLO     VAD (Silero)    Rooms/Objects
+|               |               |
+Depth (MiDaS)   Speech-to-Text  Landmarks
+|            (faster-whisper)  |
+Object Detection    |               |
+|               |               |
++-------------+---------------+---------------+
 |
 v
-Command Router
+Indoor Perception & Navigation
 |
-+------------+-------------+
-|      |       |
-v      v       v
-Navigation    OCR      Torch
-|      |       |
-+------------+--------------+
-|
-v
-Vision Context
-|
-v
-Local LLM
-(Ollama)
++-----------------+------------------+
+|                 |                  |
+v                 v                  v
+Free-Space    Command Router   Safety Controller
+Detection     |                  |
+|             +-------+----------+-------+
+|             |       |       |       |
+|             v       v       v       v
+|         Nav Mode  OCR  Torch  Room Label
+|             |       |       |       |
++-------------+-------+-------+-------+--------+
 |
 v
-Unified TTS
-(pyttsx3 / Piper)
-|
-v
-Speaker
+Vision Context → Local LLM (Ollama) → TTS → Speaker
 ```
 ---
 
 ## 📁 Package Structure
 ```
-
-surdas_ai/
+surdas/
 ├── voice/
 │  ├── __init__.py
-│  ├── vad.py        # Voice Activity Detection (Silero VAD + Energy Fallback)
-│  ├── wakeword.py     # Wake Word Detection ("Hey Surdas" / openWakeWord)
-│  ├── stt.py        # Speech to Text (faster-whisper / Whisper)
-│  ├── tts.py        # Unified Text-to-Speech (Piper + pyttsx3)
-│  ├── llm.py        # Local LLM integration (Ollama with live Vision Context)
-│  ├── command_router.py  # Deterministic Command Router vs LLM Query Router
-│  └── assistant.py     # Non-blocking audio capture & background listener
-├── surdas_brain.py     # Main Unified Vision & Voice System
-├── currency_detector.py   # Indian Banknote Recognition (Rs. 10 - Rs. 500)
+│  ├── vad.py           # Voice Activity Detection (Silero VAD + Energy Fallback)
+│  ├── wakeword.py        # Wake Word Detection (same-utterance support)
+│  ├── stt.py           # Speech to Text (faster-whisper / Whisper)
+│  ├── tts.py           # Unified Text-to-Speech (Piper + pyttsx3)
+│  ├── llm.py           # Local LLM integration (Ollama with live Vision Context)
+│  ├── command_router.py     # Deterministic Command Router with indoor nav support
+│  ├── assistant.py        # Non-blocking audio capture & background listener
+│  └── i18n_phrases.py      # Bilingual (EN/HI) command phrase dictionary
+├── navigation/
+│  ├── __init__.py
+│  ├── map_manager.py       # Offline OpenStreetMap management
+│  ├── router.py          # Pedestrian routing (Dijkstra on OSM graph)
+│  ├── navigator.py        # Turn-by-turn outdoor navigation
+│  ├── geocoder.py         # Offline place search
+│  ├── location.py         # GPS provider abstraction
+│  └── voice_guidance.py     # Navigation instruction generation
+├── spatial_memory.py       # **NEW** Persistent room/object/landmark memory (SQLite)
+├── indoor_perception.py     # **NEW** Free-space detection, occupancy grid, safe directions
+├── indoor_navigator.py      # **NEW** Safety-first indoor navigation controller
+├── surdas_brain.py        # Main Unified Vision & Voice System
+├── currency_detector.py     # Indian Banknote Recognition (Rs. 10 - Rs. 500)
+├── config.py           # Centralized configuration (thresholds, GPS, paths)
+├── logger.py           # Subsystem logging (VISION, GPS, NAV, VOICE)
+├── telemetry.py          # Caregiver dashboard broadcast
+├── test_indoor_navigation.py # **NEW** Test suite for blindfold scenarios
 ├── surdas_esp32_cam/
-│  └── surdas_esp32_cam.ino # ESP32-CAM Firmware (AP Stream, High-Res Capture, Flashlight)
+│  └── surdas_esp32_cam.ino  # ESP32-CAM Firmware
 ├── requirements.txt
 └── README.md
 ```
@@ -83,18 +94,201 @@ surdas_ai/
 - **Object Detection**: YOLOv8n real-time detection with relative proximity estimation
 - **Relative Depth Perception**: MiDaS provides proximity categories (very close, nearby, medium distance, far)
 - **Wall & Barrier Detection**: Dense depth analysis for continuous surfaces
+- **Indoor Navigation**: Waypoint-free reactive navigation with spatial memory
+- **Spatial Memory**: Persistent room/object/landmark labeling and recall (SQLite)
+- **Safety-First Navigation**: Automatic safety-hold on camera failure, obstacles, or low confidence
+- **Same-Utterance Wake**: "Surdas, command" works in single phrase (no "Hey" required)
 - **Indian Currency Recognition**: OCR + color-based denomination detection with confidence categories
 - **Text Reading (OCR)**: EasyOCR for English and Hindi text
 - **Offline Voice Assistant**: Wake word detection, Whisper STT, command routing, Ollama LLM integration
 - **Offline Pedestrian Navigation**: Uses pre-downloaded OpenStreetMap data (requires online setup once)
 
 ### 🔧 REQUIRES HARDWARE
-- **GPS Navigation**: Real-world dynamic navigation requires a GPS module (USB/Bluetooth serial GPS)
+- **GPS Navigation**: Real-world dynamic outdoor navigation requires a GPS module (USB/Bluetooth serial GPS)
 - **ESP32-CAM**: Optional wireless camera (can use local webcam for testing)
 
 ### 🧪 EXPERIMENTAL / OPTIONAL
 - **Ollama LLM Integration**: Conversational AI for visual Q&A (requires Ollama server)
 - **Caregiver Dashboard**: Real-time telemetry web interface
+
+---
+
+## 🏠 Indoor Navigation & Blindfold Usage
+
+### Overview
+SURDAS now supports **indoor navigation for blindfold scenarios** with:
+- **Spatial Memory**: Remember rooms, objects, and landmarks
+- **Deterministic Navigation**: Safety-first reactive guidance (never LLM-controlled)
+- **Free-Space Detection**: Real-time occupancy mapping from YOLO + MiDaS
+- **Navigation Confidence**: HIGH/MEDIUM/LOW/INVALID scoring
+- **Safety-Hold State**: Automatic pause on camera failure or obstacles
+- **Bilingual Commands**: English and Hindi support
+
+### Key Commands
+
+#### Room & Object Labeling
+```
+"Surdas, this is the bedroom"              # Label current room
+"Surdas, label this as kitchen entrance"   # Save landmark
+"Surdas, this is a chair"                  # Label detected object
+```
+
+#### Spatial Queries
+```
+"Surdas, where is the chair?"              # Find remembered object
+"Surdas, what room is this?"               # Identify current room
+"Surdas, describe surroundings"            # List nearby objects
+"Surdas, list rooms"                       # List all remembered rooms
+```
+
+#### Indoor Navigation
+```
+"Surdas, guide me to the door"             # Navigate to object
+"Surdas, take me to kitchen entrance"      # Navigate to landmark
+"Surdas, pause navigation"                 # Pause guidance
+"Surdas, resume navigation"                # Resume guidance
+"Surdas, stop navigation"                  # Cancel navigation
+```
+
+### Navigation States
+
+1. **IDLE**: Not navigating, spatial queries only
+2. **NAVIGATING**: Active guidance toward destination
+3. **SAFETY_HOLD**: Paused due to:
+   - Camera failure (no depth data)
+   - Stale perception (>2s old)
+   - Low confidence (obstacles blocking view)
+   - Obstacle too close (<0.8m)
+   - User requested pause
+4. **APPROACHING**: Close to destination (<1.5m)
+5. **ARRIVED**: Destination reached
+
+### Safety Features
+
+**Automatic Safety-Hold Triggers:**
+- Camera failure or invalid depth data → "camera not working, please check"
+- Obstacles very close (>0.9 relative depth) → "Stop! Obstacle very close"
+- Low navigation confidence → "Pausing: limited visibility"
+- Stale perception (>2 seconds) → "Lost camera view, reconnecting"
+
+**Movement Commands Only When:**
+- Navigation confidence >= MEDIUM
+- Perception data < 2 seconds old
+- No critical obstacles detected
+- Camera functioning normally
+
+### Blindfold Testing Protocol
+
+1. **Setup Phase**
+   ```bash
+   python surdas_brain.py  # Start system
+   # Put on blindfold, ensure camera is working
+   ```
+
+2. **Exploration Phase**
+   ```
+   "Surdas, this is the living room"       # Label room
+   # Walk around, let camera detect objects
+   "Surdas, describe surroundings"         # Hear what's detected
+   "Surdas, remember this as sofa"         # Label object
+   ```
+
+3. **Navigation Phase**
+   ```
+   "Surdas, guide me to the sofa"          # Start navigation
+   # Follow voice guidance:
+   # "Move forward. Path is clear for 3 metres."
+   # "Turn left about 30 degrees, then move forward."
+   # "Almost there. Sofa is very close."
+   # "Arrived! Sofa should be right in front of you."
+   ```
+
+4. **Safety Testing**
+   ```
+   # Cover camera → automatic safety-hold
+   # Place obstacle in path → system detects and warns
+   # Low light conditions → system reports low confidence
+   ```
+
+### Testing the System
+
+Run comprehensive test suite:
+```bash
+# All tests
+python test_indoor_navigation.py --test all
+
+# Individual tests
+python test_indoor_navigation.py --test spatial_memory
+python test_indoor_navigation.py --test perception
+python test_indoor_navigation.py --test navigation
+python test_indoor_navigation.py --test wakeword
+python test_indoor_navigation.py --test blindfold_simulation
+```
+
+Expected output:
+```
+✅ SPATIAL MEMORY: ALL TESTS PASSED
+✅ INDOOR PERCEPTION: ALL TESTS PASSED
+✅ INDOOR NAVIGATION CONTROLLER: ALL TESTS PASSED
+✅ WAKE-WORD DETECTION: ALL TESTS PASSED
+✅ BLINDFOLD SCENARIO SIMULATION: ALL TESTS PASSED
+
+🎉 ALL TESTS PASSED - INDOOR NAVIGATION READY FOR BLINDFOLD USE
+```
+
+### Spatial Memory Database
+
+Location: `spatial_memory.db` (SQLite)
+
+**Schema:**
+- `rooms`: Room definitions with boundaries
+- `objects`: Detected objects with positions, confidence, timestamps
+- `landmarks`: User-labeled navigation points
+- `spatial_relations`: Object relationships
+
+**Maintenance:**
+```python
+from spatial_memory import SpatialMemory
+
+memory = SpatialMemory()
+
+# View statistics
+stats = memory.get_stats()
+print(f"Rooms: {stats['rooms']}, Objects: {stats['objects']}")
+
+# Clear stale objects (not seen in >1 hour)
+memory.clear_stale_objects(max_age_seconds=3600)
+
+# Export to JSON
+json_data = memory.export_to_json()
+```
+
+### Hindi Commands
+
+All indoor navigation commands work in Hindi:
+```
+"सुरदास, यह बेडरूम है"                    # This is the bedroom
+"सुरदास, कुर्सी कहाँ है?"                 # Where is the chair?
+"सुरदास, मुझे दरवाजे तक ले चलो"          # Guide me to the door
+"सुरदास, आसपास बताओ"                     # Describe surroundings
+"सुरदास, नेविगेशन रोको"                   # Stop navigation
+```
+
+### Configuration
+
+Edit `config.py` for thresholds:
+```python
+# Indoor Navigation
+PERCEPTION_MAX_AGE_S = 2.0          # Max perception staleness
+ARRIVAL_THRESHOLD_M = 0.5           # Distance to consider "arrived"
+OBSTACLE_CRITICAL_M = 0.8           # Trigger safety-hold distance
+MIN_CONFIDENCE_TO_MOVE = "MEDIUM"   # Minimum confidence for movement
+
+# Depth Classification
+DEPTH_VERY_CLOSE_THRESHOLD = 0.8    # Relative depth (higher = closer)
+DEPTH_CLOSE_THRESHOLD = 0.6
+DEPTH_MEDIUM_THRESHOLD = 0.4
+```
 
 ---
 

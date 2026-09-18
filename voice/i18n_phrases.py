@@ -308,6 +308,145 @@ LANG_SWITCH_ENGLISH: IntentDict = {
     ],
 }
 
+# Indoor navigation and spatial memory commands
+INDOOR_NAV_TO_OBJECT: IntentDict = {
+    "en": [
+        "guide me to", "take me to the", "navigate to the",
+        "where is the", "find the", "show me the way to",
+    ],
+    "hi": [
+        "मुझे ले चलो", "का रास्ता बताओ", "कहाँ है",
+        "तक ले जाओ", "दिखाओ कहाँ है",
+    ],
+}
+
+INDOOR_NAV_TO_LANDMARK: IntentDict = {
+    "en": [
+        "guide me to", "take me to", "navigate to",
+        "go to", "how to reach", "show me",
+    ],
+    "hi": [
+        "मुझे ले चलो", "का रास्ता बताओ",
+        "तक ले जाओ", "कैसे पहुँचे",
+    ],
+}
+
+ROOM_LABEL: IntentDict = {
+    "en": [
+        "this is the", "label this room as", "remember this as",
+        "this room is", "call this room", "call this the",
+        "this is called", "name this room",
+    ],
+    "hi": [
+        "यह है", "इस कमरे का नाम", "इसे याद रखो",
+        "यह कमरा है", "इसे कहते हैं",
+    ],
+}
+
+OBJECT_LABEL: IntentDict = {
+    "en": [
+        "this is a", "this is the", "label this as",
+        "remember this as", "this object is", "call this",
+    ],
+    "hi": [
+        "यह है", "इसे याद रखो", "यह वस्तु है",
+        "इसका नाम है",
+    ],
+}
+
+LANDMARK_LABEL: IntentDict = {
+    "en": [
+        "remember this location as", "save this spot as",
+        "mark this as", "label this spot", "this location is",
+    ],
+    "hi": [
+        "इस जगह को याद रखो", "यह स्थान है",
+        "इस स्थान का नाम", "इस जगह को बचाओ",
+    ],
+}
+
+WHERE_IS_OBJECT: IntentDict = {
+    "en": [
+        "where is the", "where's the", "find the",
+        "locate the", "show me the", "where did i put",
+    ],
+    "hi": [
+        "कहाँ है", "किधर है", "कहाँ रखा है",
+        "ढूंढो", "दिखाओ कहाँ है",
+    ],
+}
+
+WHAT_ROOM: IntentDict = {
+    "en": [
+        "what room is this", "which room am i in",
+        "what is this room", "name this room",
+    ],
+    "hi": [
+        "यह कौन सा कमरा है", "कौन सा कमरा है यह",
+        "मैं किस कमरे में हूँ",
+    ],
+}
+
+LIST_ROOMS: IntentDict = {
+    "en": [
+        "what rooms do you know", "list rooms", "tell me the rooms",
+        "which rooms are saved", "what rooms are there",
+    ],
+    "hi": [
+        "कौन से कमरे हैं", "कमरों की सूची", "कौन से कमरे याद हैं",
+    ],
+}
+
+LIST_OBJECTS: IntentDict = {
+    "en": [
+        "what objects do you know", "list objects", "what do you remember",
+        "what have you seen", "what objects are saved",
+    ],
+    "hi": [
+        "कौन सी चीज़ें याद हैं", "क्या याद है", "वस्तुओं की सूची",
+    ],
+}
+
+DESCRIBE_SURROUNDINGS: IntentDict = {
+    "en": [
+        "describe surroundings", "what's around me", "what is nearby",
+        "what objects are near", "tell me what's nearby",
+    ],
+    "hi": [
+        "आसपास क्या है", "पास में क्या है", "आसपास बताओ",
+    ],
+}
+
+PAUSE_NAVIGATION: IntentDict = {
+    "en": [
+        "pause navigation", "pause", "hold on", "wait",
+        "stop moving", "pause guidance",
+    ],
+    "hi": [
+        "रुको", "नेविगेशन रोको", "ठहरो", "रुक जाओ",
+    ],
+}
+
+RESUME_NAVIGATION: IntentDict = {
+    "en": [
+        "resume navigation", "continue navigation", "resume",
+        "keep going", "continue", "go on",
+    ],
+    "hi": [
+        "जारी रखो", "नेविगेशन जारी रखो", "आगे बढ़ो", "चलते रहो",
+    ],
+}
+
+CLEAR_MEMORY: IntentDict = {
+    "en": [
+        "forget everything", "clear memory", "reset memory",
+        "delete all objects", "forget all rooms",
+    ],
+    "hi": [
+        "सब भूल जाओ", "मेमोरी साफ करो", "सब मिटा दो",
+    ],
+}
+
 # Hindi filler words to strip from app names / commands
 HINDI_FILLERS: List[str] = [
     "कृपया", "अभी", "जल्दी", "ज़रा", "जरा", "थोड़ा", "थोड़ी",
