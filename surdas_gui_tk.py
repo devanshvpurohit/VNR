@@ -471,6 +471,7 @@ class SurdasGUI:
             # Update navigation state
             if hasattr(self.brain, 'indoor_navigator') and self.brain.indoor_navigator:
                 nav = self.brain.indoor_navigator
+                status = nav.get_status()  # Use get_status() method
                 
                 state_colors = {
                     "IDLE": self.colors['gray'],
@@ -480,16 +481,14 @@ class SurdasGUI:
                     "ARRIVED": '#059669'
                 }
                 
-                self.nav_state_label.config(text=nav.state,
-                                           fg=state_colors.get(nav.state, self.colors['gray']))
-                self.nav_dest_label.config(text=nav.destination or "—")
+                state_name = status.state.name if hasattr(status.state, 'name') else str(status.state)
+                self.nav_state_label.config(text=state_name,
+                                           fg=state_colors.get(state_name, self.colors['gray']))
+                self.nav_dest_label.config(text=status.destination or "—")
                 
-                if hasattr(self.brain, 'indoor_perception'):
-                    perc = self.brain.indoor_perception
-                    if hasattr(perc, 'current_confidence'):
-                        self.nav_conf_label.config(text=perc.current_confidence)
-                    if hasattr(perc, 'safe_direction_count'):
-                        self.nav_safe_label.config(text=str(perc.safe_direction_count))
+                conf_name = status.confidence.name if hasattr(status.confidence, 'name') else str(status.confidence)
+                self.nav_conf_label.config(text=conf_name)
+                self.nav_safe_label.config(text=str(status.safe_directions_count))
             
             # Update uptime
             if self.start_time:
