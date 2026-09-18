@@ -565,27 +565,5 @@ class SurdasWebcamTester:
 
 
 if __name__ == "__main__":
-    if USE_GUI:
-        # Launch Tkinter GUI with test pipeline
-        print("[SYSTEM] Launching Tkinter desktop GUI for AI test pipeline...")
-        try:
-            from tkinter import Tk
-            from surdas_gui_tk import SurdasGUI
-            
-            root = Tk()
-            app = SurdasGUI(root)
-            root.protocol("WM_DELETE_WINDOW", app.on_closing)
-            
-            # Note: In GUI mode, user must click "Start System" button
-            print("[INFO] Click '▶️ Start System' button to begin testing...")
-            
-            root.mainloop()
-        except ImportError as e:
-            print(f"[ERROR] Tkinter or PIL not available: {e}")
-            print("[INFO] Falling back to OpenCV window mode...")
-            tester = SurdasWebcamTester()
-            tester.run()
-    else:
-        # OpenCV window mode (original behavior)
-        tester = SurdasWebcamTester()
-        tester.run()
+    tester = SurdasWebcamTester()
+    tester.run()

@@ -758,23 +758,5 @@ class SurdasBrain:
 
 
 if __name__ == "__main__":
-    if USE_GUI:
-        # Launch Tkinter GUI
-        print("[SYSTEM] Launching Tkinter desktop GUI...")
-        try:
-            from tkinter import Tk
-            from surdas_gui_tk import SurdasGUI
-            
-            root = Tk()
-            app = SurdasGUI(root)
-            root.protocol("WM_DELETE_WINDOW", app.on_closing)
-            root.mainloop()
-        except ImportError as e:
-            print(f"[ERROR] Tkinter or PIL not available: {e}")
-            print("[INFO] Falling back to terminal mode...")
-            brain = SurdasBrain()
-            brain.run()
-    else:
-        # Terminal mode
-        brain = SurdasBrain()
-        brain.run()
+    brain = SurdasBrain()
+    brain.run()
