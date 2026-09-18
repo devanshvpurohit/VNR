@@ -7,12 +7,13 @@ import sys
 import os
 import cv2
 import numpy as np
+import time
 from PyQt5.QtWidgets import (
     QApplication, QMainWindow, QWidget, QVBoxLayout, QHBoxLayout,
     QLabel, QPushButton, QTextEdit, QGroupBox, QGridLayout,
     QFrame, QScrollArea, QSizePolicy, QSpacerItem, QTabWidget
 )
-from PyQt5.QtCore import Qt, QTimer, pyqtSignal, QThread, QSize
+from PyQt5.QtCore import Qt, QTimer, QTime, pyqtSignal, QThread, QSize
 from PyQt5.QtGui import QImage, QPixmap, QFont, QPalette, QColor, QIcon
 
 # Add parent directory to path
@@ -214,7 +215,7 @@ class LogDisplay(QTextEdit):
         }
         
         color = color_map.get(log_type, "#6b7280")
-        timestamp = QTimer.currentTime().toString("hh:mm:ss")
+        timestamp = QTime.currentTime().toString("hh:mm:ss")
         
         html = f'<span style="color: #9ca3af;">[{timestamp}]</span> '
         html += f'<span style="color: {color}; font-weight: 600;">[{log_type.upper()}]</span> '
