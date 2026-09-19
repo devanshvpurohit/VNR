@@ -97,11 +97,19 @@ class SpeechToText:
         if len(audio_data) == 0:
             return "", "en"
 
+        # Ensure 1D array
+        if audio_data.ndim > 1:
+            audio_data = audio_data.flatten()
+        
         # Normalise to float32 [-1, 1]
         if audio_data.dtype == np.int16:
             audio = audio_data.astype(np.float32) / 32768.0
         else:
             audio = audio_data.astype(np.float32)
+        
+        # Double-check it's 1D
+        if audio.ndim > 1:
+            audio = audio.flatten()
 
         try:
             if self.engine_type == "faster-whisper":

@@ -532,6 +532,59 @@ class CommandRouter:
             else:
                 self.brain.voice.speak("Locking your screen.")
             return True
+        
+        # Voice health diagnostic
+        if text in ("voice health", "voice status", "voice diagnostic", "check voice", 
+                    "microphone status", "mic status", "wake word status"):
+            health = self.brain.get_voice_health()
+            
+            if not health.get("available"):
+                self.brain.voice.speak("Voice system unavailable.", lang=lang)
+                return True
+            
+            # Build status report
+            status_parts = []
+            
+            if health.get("healthy"):
+                status_parts.append("Voice system healthy.")
+            else:
+                status_parts.append("Voice system warning.")
+            
+            if health.get("wake_listener_active"):
+                status_parts.append("Wake listener active.")
+            else:
+                status_parts.append("Wake listener inactive.")
+            
+            if health.get("is_recording"):
+                status_parts.append("Currently recording.")
+            elif health.get("is_processing"):
+                status_parts.append("Processing command.")
+            
+            last_audio = health.get("last_audio_chunk")
+            if last_audio is not None and last_audio < 5.0:
+                status_parts.append(f"Microphone responding. Last audio {last_audio:.1f} seconds ago.")
+            
+            last_wake = health.get("last_wake_detection")
+            if last_wake is not None and last_wake < 60.0:
+                status_parts.append(f"Last wake word detected {int(last_wake)} seconds ago.")
+            
+            tts_speaking = health.get("tts_speaking")
+            if tts_speaking:
+                priority = health.get("tts_priority")
+                if priority == 1:
+                    status_parts.append("TTS: critical safety announcement.")
+                elif priority == 2:
+                    status_parts.append("TTS: navigation guidance.")
+                else:
+                    status_parts.append("TTS: speaking.")
+            
+            error_count = health.get("mic_error_count", 0)
+            if error_count > 0:
+                status_parts.append(f"{error_count} microphone errors.")
+            
+            report = " ".join(status_parts)
+            self.brain.voice.speak(report, lang=lang, force=True)
+            return True
 
         return False
 
@@ -620,9 +673,23 @@ class CommandRouter:
         return False
 
     # ─────────────────────────────────────────────────────────────────────────
-    # Category 7 — General LLM query
+    # Category 7 — General LLM query (async via LLMWorker when available)
     # ─────────────────────────────────────────────────────────────────────────
     def _handle_llm_query(self, raw_text: str, lang: str = "en"):
+        # Try async LLMWorker first (never blocks the voice thread)
+        llm_worker = getattr(self.brain, "llm_worker", None)
+        if llm_worker is not None:
+            # Acknowledge immediately so user knows we heard them
+            if lang == "hi":
+                self.brain.voice.speak("सोच रहा हूँ…", lang="hi",
+                                       priority=__import__("system_state").SpeechPriority.USER_COMMAND)
+            else:
+                self.brain.voice.speak("Let me think…",
+                                       priority=__import__("system_state").SpeechPriority.USER_COMMAND)
+            llm_worker.submit(raw_text, lang=lang, vision_context=self.brain.get_vision_context())
+            return
+
+        # Fallback: synchronous streaming (blocks voice thread)
         if not self.llm.is_available():
             if lang == "hi":
                 self.brain.voice.speak(
@@ -634,7 +701,7 @@ class CommandRouter:
                 )
             return
 
-        print("[ROUTER] → Ollama LLM (streaming)…")
+        print("[ROUTER] → Ollama LLM (streaming, synchronous fallback)…")
         vision_ctx = self.brain.get_vision_context()
 
         for sentence in self.llm.query(raw_text, vision_context=vision_ctx, lang=lang):

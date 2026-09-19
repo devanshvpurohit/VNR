@@ -103,8 +103,16 @@ npm run dev
 - 📊 Event timeline with filtering
 - 💬 Speech command history
 - 🎨 Modern Tailwind CSS design
+- 🚨 **Fall Detection Integration** (NEW!)
+  - Real-time IMU data from ESP32 (`http://192.168.4.2/imu`)
+  - Automatic emergency alerts on fall confirmation
+  - Live acceleration, pitch, and roll monitoring
+  - Fall counter with state tracking (NORMAL/POSSIBLE_FALL/IMPACT_DETECTED/FALL_CONFIRMED)
+  - Color-coded visual indicators
 
 **Recommended for**: Caregivers monitoring from another room/device
+
+**Fall Detection Docs**: See [FALL_DETECTION_SUMMARY.md](FALL_DETECTION_SUMMARY.md) for complete guide
 
 ---
 
@@ -198,10 +206,12 @@ surdas/
 - **Text Reading (OCR)**: EasyOCR for English and Hindi text
 - **Offline Voice Assistant**: Wake word detection, Whisper STT, command routing, Ollama LLM integration
 - **Offline Pedestrian Navigation**: Uses pre-downloaded OpenStreetMap data (requires online setup once)
+- **Fall Detection Dashboard**: Real-time IMU monitoring from ESP32 with automatic emergency alerts (see [FALL_DETECTION_SUMMARY.md](FALL_DETECTION_SUMMARY.md))
 
 ### 🔧 REQUIRES HARDWARE
 - **GPS Navigation**: Real-world dynamic outdoor navigation requires a GPS module (USB/Bluetooth serial GPS)
 - **ESP32-CAM**: Optional wireless camera (can use local webcam for testing)
+- **ESP32 with IMU**: Optional fall detection (MPU6050/MPU9250) at `http://192.168.4.2/imu`
 
 ### 🧪 EXPERIMENTAL / OPTIONAL
 - **Ollama LLM Integration**: Conversational AI for visual Q&A (requires Ollama server)
@@ -483,7 +493,50 @@ cd /path/to/your/suradas
 python3 surdas_brain.py
 ```
 
-**Keyboard Fallbacks**: `[N]` Navigation Mode, `[T]` Read Text, `[L]` Toggle Flashlight, `[Q]` Quit
+**Keyboard Fallbacks**: 
+- `[N]` Navigation Mode
+- `[T]` Read Text
+- `[L]` Toggle Flashlight
+- `[A]` AI Voice Mode (NEW!)
+- `[Q]` Quit
+
+---
+
+## 🎙️ AI Voice Mode
+
+**NEW: Interactive AI Assistant with Vision Pause**
+
+Press the `[A]` key to activate AI Voice Mode for quick conversational questions without vision interruptions.
+
+### Features
+- ✓ **Single-Key Activation**: Press 'A' to instantly activate
+- ✓ **Vision Pause**: All vision and safety workers pause during AI mode
+- ✓ **Single Question Mode**: System answers ONE question then auto-exits
+- ✓ **Auto-Resume**: Vision and safety automatically resume after exit
+- ✓ **Echo Cancellation**: Triple-layer protection prevents feedback loops
+- ✓ **Ollama Integration**: Uses local Llama 3.2 model
+
+### Quick Start
+```bash
+# Start SURDAS
+python3 surdas_brain.py
+
+# Press 'A' key → Ask question → System auto-exits
+```
+
+### Example Questions
+- "What's the weather today?"
+- "Tell me a joke"
+- "How does SURDAS work?"
+- "Calculate 25 times 37"
+
+### Safety Note
+⚠️ AI mode pauses obstacle detection. Use only when stationary in a safe location.
+
+### Documentation
+- **Complete Guide**: [AI_VOICE_MODE_GUIDE.md](AI_VOICE_MODE_GUIDE.md)
+- **Quick Reference**: [AI_MODE_QUICK_REF.md](AI_MODE_QUICK_REF.md)
+- **Testing**: Run `python3 test_ai_mode.py`
 
 ---
 

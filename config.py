@@ -73,9 +73,13 @@ MIDAS_CACHE_DIR = Path.home() / ".cache" / "torch" / "hub" / "intel-isl_MiDaS_ma
 # ─────────────────────────────────────────────────────────────────────────────
 # SAFETY PERCEPTION
 # ─────────────────────────────────────────────────────────────────────────────
-SAFETY_ANNOUNCEMENT_COOLDOWN = float(os.getenv("SURDAS_SAFETY_COOLDOWN", "3.0"))  # seconds
-ROUTINE_ANNOUNCEMENT_COOLDOWN = float(os.getenv("SURDAS_ROUTINE_COOLDOWN", "4.0"))  # seconds
-LONG_ANNOUNCEMENT_COOLDOWN = float(os.getenv("SURDAS_LONG_COOLDOWN", "8.0"))  # seconds
+# IMPORTANT: Increased cooldowns to prevent continuous TTS that blocks wake-word detection
+# Safety announcements (critical obstacles) still fire frequently (3s)
+# Routine announcements (path clear, objects detected) reduced to 8s minimum
+# This ensures large listening windows for wake-word detection
+SAFETY_ANNOUNCEMENT_COOLDOWN = float(os.getenv("SURDAS_SAFETY_COOLDOWN", "3.0"))  # seconds - critical warnings
+ROUTINE_ANNOUNCEMENT_COOLDOWN = float(os.getenv("SURDAS_ROUTINE_COOLDOWN", "8.0"))  # seconds - increased from 4.0
+LONG_ANNOUNCEMENT_COOLDOWN = float(os.getenv("SURDAS_LONG_COOLDOWN", "12.0"))  # seconds - increased from 8.0
 
 # ─────────────────────────────────────────────────────────────────────────────
 # GPS / LOCATION SETTINGS

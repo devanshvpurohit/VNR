@@ -34,11 +34,19 @@ _OFFLINE_MODE = os.environ.get("OFFLINE_MODE", "0") == "1"
 
 
 class VoiceAssistant:
-    """Continuous mic listener: VAD → STT (faster-whisper) → CommandRouter."""
+    """Continuous mic listener: VAD → STT (faster-whisper) → CommandRouter.
+    
+    CRITICAL FIX: Wake-word detection must work during TTS playback to prevent
+    the system from becoming unresponsive when frequent safety announcements occur.
+    """
 
     SILENCE_MS           = 600    # ms of quiet before utterance is considered done
     MIN_CLIP_SEC         = 0.35   # ignore clips shorter than this
     FOLLOW_UP_WINDOW_SEC = 20.0   # seconds to keep conversation open without wake word
+    
+    # Wake-word detection during TTS
+    TTS_BARGE_IN_BUFFER_SEC = 1.5  # Buffer audio during TTS for wake-word detection
+    TTS_BARGE_IN_CHUNK_LIMIT = 50  # Max chunks to buffer (50 * 30ms = 1.5s)
 
     def __init__(
         self,
@@ -68,6 +76,16 @@ class VoiceAssistant:
         self._is_recording         = False
         self._last_interaction_time = 0.0
         self._processor             = None
+        
+        # Wake-word detection during TTS: buffer recent audio for barge-in
+        self._tts_audio_buffer      = []  # Circular buffer for wake-word detection during TTS
+        self._tts_buffer_max        = self.TTS_BARGE_IN_CHUNK_LIMIT
+        
+        # Voice health monitoring
+        self._wake_listener_active  = False
+        self._last_audio_chunk_time = 0.0
+        self._mic_error_count       = 0
+        self._last_wake_detection   = 0.0
 
         # Bilingual language state
         self._last_detected_lang = "en"   # updated from STT each utterance
@@ -89,6 +107,24 @@ class VoiceAssistant:
     def is_active(self) -> bool:
         """True while user is speaking, or assistant is transcribing / routing command."""
         return self._is_recording or self._processing
+    
+    @property
+    def wake_listener_healthy(self) -> bool:
+        """Returns True if wake-word listener is actively processing audio."""
+        # Check if we've received audio in the last 2 seconds
+        return self._wake_listener_active and (time.time() - self._last_audio_chunk_time < 2.0)
+    
+    def get_health_status(self) -> dict:
+        """Returns diagnostic information about voice system health."""
+        return {
+            "wake_listener_active": self._wake_listener_active,
+            "is_recording": self._is_recording,
+            "is_processing": self._processing,
+            "last_audio_chunk": time.time() - self._last_audio_chunk_time if self._last_audio_chunk_time > 0 else None,
+            "last_wake_detection": time.time() - self._last_wake_detection if self._last_wake_detection > 0 else None,
+            "mic_error_count": self._mic_error_count,
+            "healthy": self.wake_listener_healthy
+        }
 
     # ── Active language ──────────────────────────────────────────────────────
 
@@ -102,11 +138,14 @@ class VoiceAssistant:
 
     def start(self):
         self._running = True
+        self._wake_listener_active = True
         threading.Thread(target=self._mic_loop, daemon=True, name="MicLoop").start()
         print("[VOICE] 🎤 Mic listener active — say 'Hey Surdas' / 'सुरदास' or ask any question.")
+        print("[VOICE] 🔊 Wake-word detection enabled DURING TTS for instant barge-in.")
 
     def stop(self):
         self._running = False
+        self._wake_listener_active = False
 
     # ── Sounddevice callback (runs in audio thread) ──────────────────────────
 
@@ -185,22 +224,103 @@ class VoiceAssistant:
             while self._running:
                 try:
                     chunk = self._audio_q.get(timeout=0.1)
+                    self._last_audio_chunk_time = time.time()  # Health monitoring
                 except queue.Empty:
                     continue
+                except Exception as e:
+                    self._mic_error_count += 1
+                    print(f"[VOICE] Audio queue error: {e}")
+                    if self._mic_error_count > 10:
+                        print("[VOICE] ⚠️  Multiple audio errors detected. Attempting recovery...")
+                        time.sleep(0.5)
+                        self._mic_error_count = 0
+                    continue
 
-                # Echo suppression: do not listen while AI is actively speaking
+                # ── ENHANCED Barge-in / Echo-Suppression Logic ─────────────────────
+                # CRITICAL FIX: During TTS playback we NOW buffer audio and perform
+                # FULL wake-word detection (both neural + transcription) to allow
+                # user to interrupt at any time, even during frequent safety announcements.
+                
                 is_ai_speaking = (
                     self.brain.voice.is_speaking
                     or (time.time() - self.brain.voice.last_speech_time < 0.35)
                 )
+                
+                # Get current TTS priority to determine echo suppression strategy
+                tts_priority = self.brain.voice.current_priority
+                is_critical_tts = (tts_priority is not None and tts_priority <= 2)  # CRITICAL_SAFETY or NAVIGATION
 
                 if is_ai_speaking:
+                    # STRATEGY 1: Neural wake-word detection (existing - fast, low latency)
+                    if self.wakeword.process_audio(chunk):
+                        print("\n[VOICE] ⚡ Barge-in detected (neural)! Interrupting TTS...")
+                        self._last_wake_detection = time.time()
+                        self.brain.voice.interrupt_for_barge_in()
+                        was_speaking = False
+                        recording = False
+                        self._is_recording = False
+                        speech_buf = []
+                        silence_chunks = 0
+                        self._tts_audio_buffer = []  # Clear buffer
+                        self._flush_audio_queue()
+                        # Announce ready for command
+                        self.brain.voice.speak("Yes?", priority=__import__("system_state").SpeechPriority.USER_COMMAND, force=True)
+                        continue
+                    
+                    # STRATEGY 2: Buffer audio for transcription-based wake-word detection
+                    # This enables "Hey Surdas" to work even if openWakeWord model isn't detecting
+                    # Only buffer during non-critical TTS to preserve safety announcements
+                    if not is_critical_tts:
+                        # Add to circular buffer
+                        self._tts_audio_buffer.append(chunk)
+                        if len(self._tts_audio_buffer) > self._tts_buffer_max:
+                            self._tts_audio_buffer.pop(0)  # Remove oldest
+                        
+                        # Check if we have enough audio to transcribe (~1.5 seconds)
+                        if len(self._tts_audio_buffer) >= 40:  # 40 chunks * 30ms = 1.2s
+                            # Check if recent audio contains speech (VAD)
+                            recent_chunks = self._tts_audio_buffer[-10:]  # Last 300ms
+                            has_recent_speech = any(self.vad.is_speech(c) for c in recent_chunks)
+                            
+                            if has_recent_speech:
+                                # Perform quick transcription check for wake word
+                                try:
+                                    buffer_audio = np.concatenate(self._tts_audio_buffer)
+                                    text, _ = self.stt.transcribe(buffer_audio, sample_rate=self.sample_rate)
+                                    
+                                    if text and text.strip():
+                                        # Check for wake word in transcription
+                                        has_wake, _ = self.wakeword.check_transcription(text)
+                                        
+                                        if has_wake:
+                                            print(f"\n[VOICE] ⚡ Barge-in detected (transcription): \"{text}\"! Interrupting TTS...")
+                                            self._last_wake_detection = time.time()
+                                            self.brain.voice.interrupt_for_barge_in()
+                                            was_speaking = False
+                                            recording = False
+                                            self._is_recording = False
+                                            speech_buf = []
+                                            silence_chunks = 0
+                                            self._tts_audio_buffer = []
+                                            self._flush_audio_queue()
+                                            self.brain.voice.speak("Yes?", priority=__import__("system_state").SpeechPriority.USER_COMMAND, force=True)
+                                            continue
+                                except Exception as e:
+                                    # Transcription failed - not critical, continue buffering
+                                    pass
+                    
+                    # Normal echo suppression: discard this chunk from recording
+                    # but wake-word detection above still happened
                     was_speaking = True
                     recording = False
                     self._is_recording = False
                     speech_buf = []
                     silence_chunks = 0
                     continue
+                
+                # Clear TTS buffer when not speaking
+                if self._tts_audio_buffer:
+                    self._tts_audio_buffer = []
 
                 if was_speaking:
                     was_speaking = False
@@ -285,6 +405,7 @@ class VoiceAssistant:
         has_wake, command = self.wakeword.check_transcription(text)
 
         if has_wake:
+            self._last_wake_detection = time.time()  # Health monitoring
             print(f"[VOICE] ✨ Wake word matched! Command: \"{command}\" [lang={effective_lang}]")
             self._last_interaction_time = time.time()
             if command and len(command.strip()) > 1:

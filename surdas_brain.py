@@ -70,6 +70,11 @@ from voice.assistant import VoiceAssistant
 from voice.llm import LocalLLM
 from voice.app_launcher import open_app, close_app
 from telemetry import start_telemetry, broadcast_event
+from system_state import (
+    SystemState, SpeechPriority, VisionState, CameraState,
+    NavigationState, SubsystemHealth
+)
+from workers import VisionWorker, SafetyWorker, LLMWorker
 
 # =====================================================
 # CONFIGURATION
@@ -131,6 +136,9 @@ class CameraStream:
 # =====================================================
 class SurdasBrain:
     def __init__(self):
+        # Central thread-safe state (independent of all subsystems)
+        self.state = SystemState()
+
         # Start Dashboard Telemetry
         start_telemetry()
         
@@ -211,16 +219,34 @@ class SurdasBrain:
 
         print(f"[SYSTEM] 🚀 All AI models loaded in parallel in {time.time() - t0_load:.2f}s!")
 
-        self.mode = "NAV"  # 'NAV' or 'OCR'
+        self.mode = "NAV"  # 'NAV' or 'OCR' or 'AI_VOICE'
         self.last_speech_time = 0
         self.last_spoken = ""
         self.led_on = False
         self.conf_threshold = YOLO_CONFIDENCE_THRESHOLD
+        
+        # AI Voice Mode state
+        self.ai_voice_mode = False
+        self.ai_voice_thread = None
+        self.ai_voice_active = False
 
-        # Live Vision Context State
+        # Live Vision Context State (kept for API compat; VisionWorker writes these)
         self.latest_detected_objects = []
         self.latest_closest_obstacle = None
         self.wall_detected = False
+
+        # ── Start background workers ──────────────────────────────────────────
+        # VisionWorker: runs YOLO + MiDaS in its own thread, never blocking voice
+        self.vision_worker = VisionWorker(self)
+        self.vision_worker.start()
+
+        # SafetyWorker: reads PerceptionResult → fires CRITICAL_SAFETY TTS
+        self.safety_worker = SafetyWorker(self, self.vision_worker)
+        self.safety_worker.start()
+
+        # LLMWorker: fully async — user commands never block waiting for Ollama
+        self.llm_worker = LLMWorker(self)
+        self.llm_worker.start()
         
         # Offline Navigation with proper location provider
         from navigation import OfflineMapManager, Navigator
@@ -289,6 +315,10 @@ class SurdasBrain:
         self.log_history = []
         self.latest_display_frame = None
         self.headless = False
+        
+        # AI Voice Mode state
+        self.ai_voice_mode = False
+        self.ai_voice_thread = None
 
     # ── LLM helper ─────────────────────────────────────────────────
     def query_llm(self, prompt: str, speak: bool = True) -> str:
@@ -352,6 +382,21 @@ class SurdasBrain:
         if self.voice.is_speaking or not self.voice._queue.empty():
             return True
         return False
+    
+    def get_voice_health(self) -> dict:
+        """Returns voice system health diagnostics."""
+        if self.voice_assistant is None:
+            return {"available": False, "reason": "Voice assistant not initialized"}
+        
+        try:
+            health = self.voice_assistant.get_health_status()
+            health["available"] = True
+            health["tts_speaking"] = self.voice.is_speaking
+            health["tts_queue_size"] = self.voice._queue.qsize() if hasattr(self.voice._queue, 'qsize') else 0
+            health["tts_priority"] = self.voice.current_priority
+            return health
+        except Exception as e:
+            return {"available": False, "error": str(e)}
 
     def toggle_esp32_led(self, state: bool):
         """Toggles the ESP32-CAM flash torch."""
@@ -681,22 +726,240 @@ class SurdasBrain:
             self.voice.speak("No clear text detected.")
 
         self.mode = "NAV"
+    
+    def start_ai_voice_mode(self):
+        """Start always-listening AI voice conversation mode.
+        
+        SINGLE QUESTION MODE: Answers one question then automatically exits.
+        Vision processing is paused during AI mode.
+        """
+        if self.ai_voice_mode:
+            return  # Already active
+        
+        self.ai_voice_mode = True
+        
+        # Pause vision workers
+        print("[AI_VOICE] ⏸️  Pausing vision processing...")
+        if hasattr(self, 'vision_worker'):
+            self.vision_worker.pause()
+        if hasattr(self, 'safety_worker'):
+            self.safety_worker.pause()
+        
+        self.voice.speak("AI voice mode. Ask your question.", force=True)
+        
+        # Run AI voice loop in background thread
+        def ai_voice_loop():
+            import numpy as np
+            import queue as q
+            
+            # Initialize if needed
+            try:
+                from voice.vad import VoiceActivityDetector
+                vad = VoiceActivityDetector(sample_rate=16000)
+            except:
+                print("[AI_VOICE] VAD initialization failed")
+                self.ai_voice_mode = False
+                return
+            
+            SAMPLE_RATE = 16000
+            CHUNK_MS = 30
+            CHUNK_SIZE = int(SAMPLE_RATE * CHUNK_MS / 1000)
+            SILENCE_CHUNKS = 20
+            
+            audio_queue = q.Queue()
+            question_answered = False  # Track if we've answered one question
+            
+            def audio_callback(indata, frames, time_info, status):
+                audio_queue.put(indata.flatten().copy())
+            
+            try:
+                import sounddevice as sd
+                stream = sd.InputStream(
+                    samplerate=SAMPLE_RATE,
+                    channels=1,
+                    dtype='float32',
+                    blocksize=CHUNK_SIZE,
+                    callback=audio_callback
+                )
+                
+                stream.start()
+                print("[AI_VOICE] 🎤 Listening for ONE question...")
+                
+                recording = False
+                speech_buffer = []
+                silence_count = 0
+                echo_suppression_active = False
+                echo_message_shown = False
+                last_spoken_text = ""
+                
+                while self.ai_voice_mode and not question_answered:
+                    try:
+                        chunk = audio_queue.get(timeout=0.1)
+                    except q.Empty:
+                        continue
+                    
+                    # Echo cancellation
+                    if self.voice.is_speaking:
+                        if recording:
+                            recording = False
+                            speech_buffer = []
+                            silence_count = 0
+                        if not echo_suppression_active:
+                            echo_suppression_active = True
+                            if not echo_message_shown:
+                                print("[AI_VOICE] 🔇 Echo suppression active")
+                                echo_message_shown = True
+                        continue
+                    
+                    time_since_tts = time.time() - self.voice.last_speech_time
+                    if time_since_tts < 0.5:
+                        if recording:
+                            recording = False
+                            speech_buffer = []
+                            silence_count = 0
+                        continue
+                    
+                    if echo_suppression_active:
+                        echo_suppression_active = False
+                    
+                    # Voice activity detection
+                    is_speech = vad.is_speech(chunk)
+                    
+                    if is_speech:
+                        if not recording:
+                            print("[AI_VOICE] 🔴 Listening...", end="", flush=True)
+                            recording = True
+                            speech_buffer = []
+                            silence_count = 0
+                        speech_buffer.append(chunk)
+                        silence_count = 0
+                    elif recording:
+                        speech_buffer.append(chunk)
+                        silence_count += 1
+                        
+                        if silence_count >= SILENCE_CHUNKS:
+                            print(" Done.")
+                            recording = False
+                            
+                            audio = np.concatenate(speech_buffer)
+                            if audio.ndim > 1:
+                                audio = audio.flatten()
+                            
+                            speech_buffer = []
+                            silence_count = 0
+                            
+                            if len(audio) < SAMPLE_RATE * 0.3:
+                                print("  (Too short, try again)\n")
+                                continue
+                            
+                            audio_level = np.abs(audio).max()
+                            if audio_level < 0.001:
+                                print("  (Too quiet, try again)\n")
+                                continue
+                            
+                            # Transcribe
+                            print("[AI_VOICE] ⏳ Transcribing...", end="", flush=True)
+                            try:
+                                from voice.stt import SpeechToText
+                                if not hasattr(self, '_ai_stt'):
+                                    self._ai_stt = SpeechToText()
+                                text, lang = self._ai_stt.transcribe(audio, sample_rate=SAMPLE_RATE)
+                                print(f" Done.")
+                            except Exception as e:
+                                print(f" Error: {e}\n")
+                                continue
+                            
+                            if not text or not text.strip() or len(text.strip()) < 3:
+                                print("  (No speech detected, try again)\n")
+                                continue
+                            
+                            print(f"[AI_VOICE] 💬 You: {text}")
+                            
+                            # Echo detection
+                            if last_spoken_text:
+                                text_words = set(text.lower().strip().split())
+                                last_words = set(last_spoken_text.lower().strip().split())
+                                if text_words and last_words:
+                                    overlap = len(text_words & last_words) / len(text_words)
+                                    if overlap > 0.6:
+                                        print("  (Echo detected, try again)\n")
+                                        continue
+                            
+                            # Send to LLM - THIS IS THE ONE QUESTION
+                            print("[AI_VOICE] 🤖 Ollama: ", end="", flush=True)
+                            response = ""
+                            try:
+                                for chunk_text in self.llm.query(text, vision_context=self.get_vision_context()):
+                                    response += chunk_text
+                                    print(chunk_text, end="", flush=True)
+                                print()
+                                
+                                if response.strip():
+                                    last_spoken_text = response
+                                    self.voice.speak(response, force=True)
+                                    while self.voice.is_speaking:
+                                        time.sleep(0.1)
+                                    print("[AI_VOICE] ✓")
+                                    
+                                    # Mark question as answered - will exit after this
+                                    question_answered = True
+                                    print("[AI_VOICE] Question answered. Exiting AI mode...\n")
+                                    
+                            except Exception as e:
+                                print(f"\n[AI_VOICE] Error: {e}")
+                                print("[AI_VOICE] Trying again...\n")
+                                continue
+                
+                stream.stop()
+                stream.close()
+                
+                # Auto-exit after answering
+                self.stop_ai_voice_mode()
+                
+            except Exception as e:
+                print(f"[AI_VOICE] Failed to start: {e}")
+                self.ai_voice_mode = False
+                # Resume vision on error
+                if hasattr(self, 'vision_worker'):
+                    self.vision_worker.resume()
+                if hasattr(self, 'safety_worker'):
+                    self.safety_worker.resume()
+        
+        self.ai_voice_thread = threading.Thread(target=ai_voice_loop, daemon=True)
+        self.ai_voice_thread.start()
+    
+    def stop_ai_voice_mode(self):
+        """Stop AI voice mode and resume vision processing."""
+        if not self.ai_voice_mode:
+            return
+        
+        self.ai_voice_mode = False
+        
+        # Resume vision workers
+        print("[AI_VOICE] ▶️  Resuming vision processing...")
+        if hasattr(self, 'vision_worker'):
+            self.vision_worker.resume()
+        if hasattr(self, 'safety_worker'):
+            self.safety_worker.resume()
+        
+        self.voice.speak("Returning to navigation mode.", force=True)
+        print("[AI_VOICE] Stopped. Vision resumed.")
 
     def run(self):
         print("\n" + "="*65)
         print(" SURDAS ASSISTIVE VISION & VOICE ASSISTANT RUNNING")
         print(" Features:")
-        print("   • YOLOv8 Object & Obstacle Detection")
-        print("   • MiDaS Dense Depth & Wall / Barrier Detection")
+        print("   • YOLOv8 Object & Obstacle Detection  (VisionWorker thread)")
+        print("   • MiDaS Dense Depth & Wall Detection  (VisionWorker thread)")
         print("   • Natural Voice Assistant ('Hey Surdas')")
-        print(" Controls: [N] Nav Mode | [T] Read Text | [L] Torch | [Q] Quit")
+        print("   • AI Voice Mode - Always listening (Press 'A')")
+        print("   • Async LLM — never blocks voice or safety")
+        print(" Controls: [N] Nav | [T] Text | [A] AI Voice | [L] Torch | [Q] Quit")
         print("="*65 + "\n")
 
-        prev_time = time.time()
-
         while True:
-            frame = self.stream.get_frame()
-            if frame is None:
+            # ── No camera frame yet (stream connecting) ─────────────────
+            if self.stream.get_frame() is None:
                 blank = np.zeros((360, 640, 3), dtype=np.uint8)
                 cv2.putText(blank, "Waiting for ESP32-CAM Stream...", (60, 160),
                             cv2.FONT_HERSHEY_SIMPLEX, 0.8, (0, 200, 255), 2)
@@ -704,9 +967,7 @@ class SurdasBrain:
                             cv2.FONT_HERSHEY_SIMPLEX, 0.5, (180, 180, 180), 1)
                 cv2.putText(blank, "Make sure PC is connected to Wi-Fi: SURDAS_EYES", (60, 240),
                             cv2.FONT_HERSHEY_SIMPLEX, 0.5, (100, 255, 100), 1)
-                
                 self.latest_display_frame = blank.copy()
-                
                 if not self.headless:
                     cv2.imshow("SURDAS - Vision Monitor", blank)
                     key = cv2.waitKey(100) & 0xFF
@@ -716,27 +977,57 @@ class SurdasBrain:
                     time.sleep(0.1)
                 continue
 
-            curr_time = time.time()
-            fps = 1.0 / max(0.001, (curr_time - prev_time))
-            prev_time = curr_time
-
             if self.mode == "NAV":
-                rgb_view, depth_view, count = self.process_navigation(frame)
-                combined = np.hstack((rgb_view, depth_view))
-                display_frame = cv2.resize(combined, (1024, 400))
-                
-                wall_tag = " | 🧱 WALL DETECTED" if self.wall_detected else ""
-                cv2.putText(display_frame, f"FPS: {int(fps)} | Objects: {count}{wall_tag}", (15, 30),
-                            cv2.FONT_HERSHEY_SIMPLEX, 0.65, (0, 255, 255), 2)
-                
-                self.latest_display_frame = display_frame.copy()
-                
-                if not self.headless:
-                    cv2.imshow("SURDAS - Vision Monitor", display_frame)
+                # ── Read latest result from VisionWorker (non-blocking) ─────
+                perception = self.vision_worker.latest
+
+                if perception is not None and perception.frame is not None:
+                    rgb_view = perception.frame
+                    depth_view = perception.depth_colormap
+                    count = len(perception.detected_obstacles)
+                    fps = perception.fps
+
+                    if depth_view is not None:
+                        # Ensure same height before hstack
+                        h = min(rgb_view.shape[0], depth_view.shape[0])
+                        rgb_view = rgb_view[:h]
+                        depth_view = depth_view[:h]
+                        combined = np.hstack((rgb_view, depth_view))
+                    else:
+                        combined = rgb_view
+
+                    display_frame = cv2.resize(combined, (1024, 400))
+                    wall_tag = " | WALL DETECTED" if self.wall_detected else ""
+                    cv2.putText(display_frame, f"FPS: {int(fps)} | Objects: {count}{wall_tag}", (15, 30),
+                                cv2.FONT_HERSHEY_SIMPLEX, 0.65, (0, 255, 255), 2)
+                    self.latest_display_frame = display_frame.copy()
+
+                    if not self.headless:
+                        cv2.imshow("SURDAS - Vision Monitor", display_frame)
+                else:
+                    # Vision worker not ready yet — brief sleep
+                    time.sleep(0.01)
+
+                # GPS location update (kept in main loop since it's fast)
+                if hasattr(self, "navigator") and self.navigator:
+                    try:
+                        current_loc = self.location_provider.get_location()
+                        self.navigator.update_location(current_loc)
+                    except Exception:
+                        pass
+
+                # Broadcast vision telemetry
+                try:
+                    broadcast_event("vision", self.get_vision_context())
+                except Exception:
+                    pass
 
             elif self.mode == "OCR":
-                self.process_ocr(frame)
-                
+                frame = self.stream.get_frame()
+                if frame is not None:
+                    self.process_ocr(frame)
+
+            # ── Keyboard controls ─────────────────────────────────────────
             if not self.headless:
                 key = cv2.waitKey(1) & 0xFF
                 if key == ord('q'):
@@ -748,13 +1039,25 @@ class SurdasBrain:
                     self.mode = "OCR"
                 elif key == ord('l'):
                     self.toggle_esp32_led(not self.led_on)
+                elif key == ord('a'):
+                    # Toggle AI Voice Mode
+                    if self.ai_voice_mode:
+                        self.stop_ai_voice_mode()
+                    else:
+                        self.start_ai_voice_mode()
             else:
                 time.sleep(0.01)
 
+        # ── Graceful shutdown ─────────────────────────────────────────────
+        print("\n[SYSTEM] Shutting down workers...")
+        self.vision_worker.stop()
+        self.safety_worker.stop()
+        self.llm_worker.stop()
         if self.voice_assistant:
             self.voice_assistant.stop()
         self.stream.stop()
         cv2.destroyAllWindows()
+        print("[SYSTEM] SURDAS shutdown complete.")
 
 
 if __name__ == "__main__":

@@ -197,7 +197,17 @@ class SpatialMemory:
                 conn.execute("CREATE INDEX IF NOT EXISTS idx_objects_room ON objects(room_id)")
                 conn.execute("CREATE INDEX IF NOT EXISTS idx_objects_category ON objects(category)")
                 conn.execute("CREATE INDEX IF NOT EXISTS idx_landmarks_name ON landmarks(name)")
-                
+
+                # Ensure observation_count and is_static columns exist (Requirement 21 & 22)
+                try:
+                    conn.execute("ALTER TABLE objects ADD COLUMN observation_count INTEGER DEFAULT 1")
+                except sqlite3.OperationalError:
+                    pass
+                try:
+                    conn.execute("ALTER TABLE objects ADD COLUMN is_static INTEGER DEFAULT 1")
+                except sqlite3.OperationalError:
+                    pass
+
                 conn.commit()
                 print("[SPATIAL_MEMORY] ✅ Database initialized")
             finally:
@@ -359,6 +369,72 @@ class SpatialMemory:
                 conn.commit()
                 print(f"[SPATIAL_MEMORY] Object '{label}' added (id={obj_id})")
                 return obj_id
+            finally:
+                conn.close()
+
+    def update_or_add_object(
+        self,
+        label: str,
+        category: ObjectCategory,
+        x: float,
+        y: float,
+        z: float,
+        confidence: float,
+        room_id: Optional[int] = None,
+        association_radius_m: float = 1.5,
+    ) -> Tuple[int, bool]:
+        """
+        Object association & update (Requirement 22):
+        If an object with the same label exists within association_radius_m,
+        update its position, confidence, last_seen, and observation_count.
+        Otherwise, create a new object.
+        Returns: (object_id, is_new)
+        """
+        now = time.time()
+        with self._lock:
+            conn = sqlite3.connect(self.db_path)
+            try:
+                cursor = conn.execute(
+                    "SELECT id, x, y, z, confidence, observation_count FROM objects WHERE label = ?",
+                    (label,)
+                )
+                rows = cursor.fetchall()
+                best_match = None
+                min_dist = float("inf")
+                for row in rows:
+                    oid, ox, oy, oz, oconf, ocount = row
+                    dist = math.hypot(x - ox, y - oy)
+                    if dist <= association_radius_m and dist < min_dist:
+                        min_dist = dist
+                        best_match = (oid, ox, oy, oz, oconf, ocount if ocount is not None else 1)
+
+                if best_match:
+                    oid, ox, oy, oz, oconf, ocount = best_match
+                    smooth_x = 0.7 * ox + 0.3 * x
+                    smooth_y = 0.7 * oy + 0.3 * y
+                    smooth_z = 0.7 * oz + 0.3 * z
+                    new_conf = max(oconf, confidence)
+                    new_count = ocount + 1
+                    conn.execute(
+                        """UPDATE objects 
+                           SET x = ?, y = ?, z = ?, confidence = ?, last_seen = ?, observation_count = ?
+                           WHERE id = ?""",
+                        (smooth_x, smooth_y, smooth_z, new_conf, now, new_count, oid)
+                    )
+                    conn.commit()
+                    return oid, False
+                else:
+                    cat_val = category.value if hasattr(category, "value") else str(category)
+                    is_static = 1 if cat_val in ("furniture", "door", "window") else 0
+                    cursor = conn.execute(
+                        """INSERT INTO objects (label, category, x, y, z, confidence, room_id, last_seen, created_at, observation_count, is_static)
+                           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 1, ?)""",
+                        (label, cat_val, x, y, z, confidence, room_id, now, now, is_static)
+                    )
+                    obj_id = cursor.lastrowid
+                    conn.commit()
+                    print(f"[SPATIAL_MEMORY] Associated new object '{label}' (id={obj_id})")
+                    return obj_id, True
             finally:
                 conn.close()
     
