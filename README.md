@@ -400,6 +400,16 @@ DEPTH_MEDIUM_THRESHOLD = 0.4
 
 The assistant wakes up on either "Hey Surdas" or "Surdas":
 
+### Voice System Features
+
+**🎙️ XTTS-v2 Voice Cloning (NEW!)**
+- Natural voice cloning using your reference voice
+- Any language supported by XTTS-v2
+- In-memory audio generation (no temporary files)
+- Preserves all priority and barge-in features
+- Graceful fallback to system TTS
+- See [XTTS_QUICKSTART.md](XTTS_QUICKSTART.md) for setup
+
 ### 1. Deterministic Commands (Zero Latency, No LLM required):
 Navigation: "Hey Surdas, start navigation" or "Navigation mode"
 Read Text: "Hey Surdas, read text" or "Read this sign" (automatically turns on torch, snaps image, reads aloud, and turns off torch)

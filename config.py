@@ -287,3 +287,14 @@ if __name__ == "__main__":
     print(f"Log Level: {LOG_LEVEL}")
     print(f"Default Test Location: {DEFAULT_TEST_LOCATION['name']}")
     print("=" * 60)
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# XTTS-V2 VOICE CLONING SETTINGS
+# ─────────────────────────────────────────────────────────────────────────────
+XTTS_ENABLED = os.getenv("XTTS_ENABLED", "true").lower() == "true"
+XTTS_MODEL = os.getenv("XTTS_MODEL", "tts_models/multilingual/multi-dataset/xtts_v2")
+XTTS_LANGUAGE = os.getenv("XTTS_LANGUAGE", "en")
+XTTS_REFERENCE_WAV = os.getenv("XTTS_REFERENCE_WAV", str(PROJECT_ROOT / "voice_models" / "surdas_reference.wav"))
+XTTS_WARMUP = os.getenv("XTTS_WARMUP", "true").lower() == "true"
+XTTS_USE_GPU = os.getenv("XTTS_USE_GPU", "false").lower() == "true"
